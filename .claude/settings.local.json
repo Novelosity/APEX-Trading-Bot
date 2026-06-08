@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(vercel --version)",
+      "Bash(vercel)",
+      "Bash(git remote:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
