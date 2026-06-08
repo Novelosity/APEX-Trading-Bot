@@ -6,7 +6,10 @@
       "Bash(git remote:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(vercel:*)",
+      "Bash(node:*)",
+      "mcp__claude_ai_cloudflare-api__execute"
     ]
   }
 }
