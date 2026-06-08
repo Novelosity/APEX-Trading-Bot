@@ -63,6 +63,19 @@ export class ExchangeClient {
       ...(this.apiPassphrase ? { password: this.apiPassphrase } : {}),
     }
 
+    // KuCoin blocks US IPs — route through Cloudflare Worker proxy (non-US edge)
+    if (this.exchangeId === 'kucoin') {
+      const proxyBase = 'https://kucoin-proxy.astikkosapparel009.workers.dev'
+      config.urls = {
+        api: {
+          public: proxyBase,
+          private: proxyBase,
+          futuresPrivate: `${proxyBase}/futures`,
+          futuresPublic: `${proxyBase}/futures`,
+        },
+      }
+    }
+
     if (this.tradingMode === 'futures') {
       config.options = { defaultType: 'future' }
     }
