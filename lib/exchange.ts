@@ -63,24 +63,27 @@ export class ExchangeClient {
       ...(this.apiPassphrase ? { password: this.apiPassphrase } : {}),
     }
 
-    // KuCoin blocks US IPs — route through Cloudflare Worker proxy (non-US edge)
-    if (this.exchangeId === 'kucoin') {
-      const proxyBase = 'https://kucoin-proxy.astikkosapparel009.workers.dev'
-      config.urls = {
-        api: {
-          public: proxyBase,
-          private: proxyBase,
-          futuresPrivate: `${proxyBase}/futures`,
-          futuresPublic: `${proxyBase}/futures`,
-        },
-      }
-    }
-
     if (this.tradingMode === 'futures') {
       config.options = { defaultType: 'future' }
     }
 
     this.exchange = new ExchangeClass(config)
+
+    // KuCoin blocks US IPs — override URLs after instantiation to use CF Worker proxy
+    // CF Smart Placement routes the Worker near KuCoin's servers (non-US exit IP)
+    if (this.exchangeId === 'kucoin') {
+      const p = 'https://kucoin-proxy.astikkosapparel009.workers.dev'
+      const api = this.exchange.urls['api']
+      api['public'] = p
+      api['private'] = p
+      api['earn'] = p
+      api['uta'] = p
+      api['utaPrivate'] = p
+      api['webExchange'] = p
+      api['broker'] = p
+      api['futuresPublic'] = `${p}/futures`
+      api['futuresPrivate'] = `${p}/futures`
+    }
     return this.exchange
   }
 
