@@ -72,7 +72,7 @@ export class ExchangeClient {
     // KuCoin blocks US IPs — override URLs after instantiation to use CF Worker proxy
     // CF Smart Placement routes the Worker near KuCoin's servers (non-US exit IP)
     if (this.exchangeId === 'kucoin') {
-      const p = 'https://kucoin-proxy.astikkosapparel009.workers.dev'
+      const p = 'https://kucoin-proxy-apex.fly.dev'
       const api = this.exchange.urls['api']
       api['public'] = p
       api['private'] = p
