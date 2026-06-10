@@ -3,8 +3,8 @@
 import { useState } from 'react'
 
 interface TradingToggleProps {
-  execMode: 'manual' | 'auto'
-  onToggle: (mode: 'manual' | 'auto') => Promise<void>
+  execMode: 'manual' | 'auto' | 'approval'
+  onToggle: (mode: 'manual' | 'auto' | 'approval') => Promise<void>
 }
 
 export function TradingToggle({ execMode, onToggle }: TradingToggleProps) {

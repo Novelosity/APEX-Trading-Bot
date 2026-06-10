@@ -3,7 +3,7 @@ export const preferredRegion = 'fra1'
 
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
-import { getAllUsers, saveSignal, getAllSignalSources, saveExternalSignal, getSignals, saveTrade, markSignalExecuted, updateBotState, getOpenTrades, getBotState } from '@/lib/storage'
+import { getAllUsers, saveSignal, getAllSignalSources, saveExternalSignal, saveTrade, markSignalExecuted, updateBotState, getOpenTrades, getBotState, getDailyTradeCount, incrementDailyTradeCount, getLastLossAt, savePendingApproval } from '@/lib/storage'
 import { ExchangeClient } from '@/lib/exchange'
 import type { OHLCVCandle } from '@/lib/exchange'
 import { generateSignal } from '@/lib/signals'
@@ -14,7 +14,8 @@ import {
   analyzeSocialSentiment,
   calculateEnhancedSignal
 } from '@/lib/signal-providers'
-import { calculatePositionSize, checkCanTrade } from '@/lib/risk'
+import { checkCanTrade } from '@/lib/risk'
+import { calculateTradeSpec } from '@/lib/position-sizing'
 import type { Signal, SignalSource, Trade } from '@/lib/types'
 
 const PAIRS_ATR_APPROX: Record<string, number> = {
@@ -241,65 +242,146 @@ export async function GET(request: Request) {
           await processSignalSource(source, pair, closesByTF, candlesByTF, externalSignals)
         }
 
-        // Generate signals for ALL users (not just auto)
+        // Generate signals for ALL users (signal engine v3.0 — min score 75)
         for (const user of users) {
           const signal = generateSignal(user.id, pair, candlesByTF)
-          if (signal && signal.score >= 70) {
-            await saveSignal(signal)
-            signalsFound++
+          // v3.0 engine already enforces 75+ score internally, but double-check
+          if (!signal || signal.score < 75) continue
 
-            // Immediately execute for auto-mode users
-            if (user.execMode === 'auto' && (signal.tier === 'HIGH' || signal.tier === 'ULTRA_HIGH')) {
-              try {
-                const userClient = new ExchangeClient(user)
-                const openTrades = await getOpenTrades(user.id)
-                const balanceData = await userClient.fetchBalance()
-                const availableBalance = balanceData.free * (user.balancePct / 100)
+          await saveSignal(signal)
+          signalsFound++
 
-                const canCheck = await checkCanTrade(user.id, signal.pair, signal.direction, openTrades, user, availableBalance)
-                if (!canCheck.allowed) continue
+          const botState = await getBotState(user.id)
 
-                const ticker = await userClient.fetchTicker(signal.pair)
-                const entry = ticker.last || signal.entry
+          // ── Kill switch check ────────────────────────────────────────────
+          if (botState.tradingHalted) continue
+
+          // ── Approval mode: queue for human review ────────────────────────
+          if (user.execMode === 'approval') {
+            // Attach expiry (2h from now) and queue for dashboard review
+            const signalWithApproval = {
+              ...signal,
+              pendingApproval: true,
+              approvalExpiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+            }
+            await saveSignal(signalWithApproval)
+            await savePendingApproval(user.id, signal.id)
+            continue
+          }
+
+          // ── Manual mode: only save signal, no execution ──────────────────
+          if (user.execMode === 'manual') continue
+
+          // ── Auto mode: execute if HIGH or ULTRA_HIGH ─────────────────────
+          if (user.execMode === 'auto' && (signal.tier === 'HIGH' || signal.tier === 'ULTRA_HIGH')) {
+            try {
+              const PAPER_BALANCE = 10000
+
+              // Paper trading
+              if (user.paperMode) {
+                const entry = signal.entry
                 if (!entry || entry === 0) continue
 
-                const atr = PAIRS_ATR_APPROX[signal.pair] || entry * 0.01
-                const botState = await getBotState(user.id)
-                const positionSize = calculatePositionSize(availableBalance, user.riskPct, entry,
-                  signal.direction === 'long' ? entry - atr * 1.5 : entry + atr * 1.5,
-                  botState.consecutiveLosses
-                )
+                const availableBalance = PAPER_BALANCE * (user.balancePct / 100)
+                const openTrades = await getOpenTrades(user.id)
+                const tradesToday = await getDailyTradeCount(user.id)
+                const lastLossAt = await getLastLossAt(user.id) || undefined
 
-                let sl: number, tp1: number, tp2: number, tp3: number
-                if (signal.direction === 'long') {
-                  sl = entry - atr * 1.5; tp1 = entry + atr * 2.25; tp2 = entry + atr * 3.75; tp3 = entry + atr * 6.0
-                } else {
-                  sl = entry + atr * 1.5; tp1 = entry - atr * 2.25; tp2 = entry - atr * 3.75; tp3 = entry - atr * 6.0
-                }
+                const riskCheck = await checkCanTrade(user.id, signal.pair, signal.direction, openTrades, user, availableBalance, tradesToday, lastLossAt)
+                if (!riskCheck.allowed) continue
+
+                const spec = calculateTradeSpec({
+                  balance: availableBalance,
+                  user,
+                  entry,
+                  sl: signal.sl,
+                  tp2: signal.tp2,
+                  direction: signal.direction,
+                  pair: signal.pair,
+                  score: signal.score,
+                  consecutiveLosses: botState.consecutiveLosses,
+                })
+                if (!spec.isValid) continue
 
                 const trade: Trade = {
                   id: randomUUID(), userId: user.id, pair: signal.pair,
-                  direction: signal.direction, entryPrice: entry, positionSize,
-                  slPrice: sl, tp1Price: tp1, tp2Price: tp2, tp3Price: tp3,
+                  direction: signal.direction, entryPrice: entry,
+                  positionSize: spec.positionSizeUsd,
+                  slPrice: signal.sl, tp1Price: signal.tp1, tp2Price: signal.tp2, tp3Price: signal.tp3,
                   status: 'open', openedAt: new Date().toISOString(),
+                  notes: '[PAPER]',
                 }
-
-                if (user.tradingMode === 'futures') {
-                  await userClient.setLeverage(signal.pair, user.leverage)
-                }
-
-                const side = signal.direction === 'long' ? 'buy' : 'sell'
-                const order = await userClient.createMarketOrder(signal.pair, side, positionSize / entry)
-                trade.orderId = order.id
-                trade.entryPrice = order.price || entry
-
                 await saveTrade(trade)
                 await markSignalExecuted(signal.id, trade.id)
                 await updateBotState(user.id, { totalTrades: botState.totalTrades + 1, lastTradeAt: new Date().toISOString() })
+                await incrementDailyTradeCount(user.id)
                 executedCount++
-              } catch (execErr) {
-                console.error(`Auto-execute failed for ${user.id} on ${pair}:`, execErr)
+                continue
               }
+
+              // Live trading
+              const userClient = new ExchangeClient(user)
+              const openTrades = await getOpenTrades(user.id)
+              const balanceData = await userClient.fetchBalance()
+              const availableBalance = balanceData.free * (user.balancePct / 100)
+              const tradesToday = await getDailyTradeCount(user.id)
+              const lastLossAt = await getLastLossAt(user.id) || undefined
+
+              const riskCheck = await checkCanTrade(user.id, signal.pair, signal.direction, openTrades, user, availableBalance, tradesToday, lastLossAt)
+              if (!riskCheck.allowed) continue
+
+              // Pre-execution recheck: get live price
+              const ticker = await userClient.fetchTicker(signal.pair)
+              const liveEntry = ticker.last || signal.entry
+              if (!liveEntry || liveEntry === 0) continue
+
+              // Slippage guard: skip if price moved > 0.5% since signal
+              const slippage = Math.abs(liveEntry - signal.entry) / signal.entry
+              if (slippage > 0.005) {
+                console.log(`Skipping ${pair}: price moved ${(slippage * 100).toFixed(2)}% since signal`)
+                continue
+              }
+
+              const spec = calculateTradeSpec({
+                balance: availableBalance,
+                user,
+                entry: liveEntry,
+                sl: signal.sl,
+                tp2: signal.tp2,
+                direction: signal.direction,
+                pair: signal.pair,
+                score: signal.score,
+                consecutiveLosses: botState.consecutiveLosses,
+              })
+              if (!spec.isValid) {
+                console.log(`Position sizing blocked: ${spec.invalidReason}`)
+                continue
+              }
+
+              if (user.tradingMode === 'futures') {
+                await userClient.setLeverage(signal.pair, user.leverage)
+              }
+
+              const side = signal.direction === 'long' ? 'buy' : 'sell'
+              const order = await userClient.createMarketOrder(signal.pair, side, spec.quantityBase)
+              const executedEntry = order.price || liveEntry
+
+              const trade: Trade = {
+                id: randomUUID(), userId: user.id, pair: signal.pair,
+                direction: signal.direction, entryPrice: executedEntry,
+                positionSize: spec.positionSizeUsd,
+                slPrice: signal.sl, tp1Price: signal.tp1, tp2Price: signal.tp2, tp3Price: signal.tp3,
+                status: 'open', openedAt: new Date().toISOString(),
+                orderId: order.id,
+              }
+
+              await saveTrade(trade)
+              await markSignalExecuted(signal.id, trade.id)
+              await updateBotState(user.id, { totalTrades: botState.totalTrades + 1, lastTradeAt: new Date().toISOString() })
+              await incrementDailyTradeCount(user.id)
+              executedCount++
+            } catch (execErr) {
+              console.error(`Auto-execute failed for ${user.id} on ${pair}:`, execErr)
             }
           }
         }

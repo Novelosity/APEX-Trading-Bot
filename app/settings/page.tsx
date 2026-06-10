@@ -8,14 +8,17 @@ import { EXCHANGES } from '@/lib/exchanges'
 
 interface UserSettings {
   exchange: string
+  email?: string
   tradingMode: string
-  execMode: 'manual' | 'auto'
+  execMode: 'manual' | 'auto' | 'approval'
+  paperMode: boolean
   leverage: number
   balancePct: number
   riskPct: number
   maxPositions: number
   hasApiKey: boolean
   hasPassphrase: boolean
+  maskedApiKey?: string
   createdAt: string
 }
 
@@ -41,7 +44,8 @@ export default function SettingsPage() {
   const [credSaved, setCredSaved] = useState(false)
 
   // Local editable state
-  const [execMode, setExecMode] = useState<'manual' | 'auto'>('manual')
+  const [execMode, setExecMode] = useState<'manual' | 'auto' | 'approval'>('manual')
+  const [paperMode, setPaperMode] = useState(true)
   const [riskPct, setRiskPct] = useState(1)
   const [balancePct, setBalancePct] = useState(100)
   const [maxPositions, setMaxPositions] = useState(5)
@@ -57,6 +61,7 @@ export default function SettingsPage() {
       }
       setSettings(data.data)
       setExecMode(data.data.execMode)
+      setPaperMode(data.data.paperMode ?? true)
       setRiskPct(data.data.riskPct)
       setBalancePct(data.data.balancePct)
       setMaxPositions(data.data.maxPositions)
@@ -122,7 +127,7 @@ export default function SettingsPage() {
       const res = await fetch('/api/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ execMode, riskPct, balancePct, maxPositions, leverage }),
+        body: JSON.stringify({ execMode, paperMode, riskPct, balancePct, maxPositions, leverage }),
       })
       const data = await res.json()
       if (!data.success) {
@@ -324,40 +329,70 @@ export default function SettingsPage() {
           <h3 className="font-semibold text-[#e8e8f0] mb-5">Trading Parameters</h3>
 
           <div className="space-y-6">
+            {/* Paper Trading Mode */}
+            <div className={`p-4 rounded-xl border-2 transition-all ${paperMode ? 'border-[#ffd700]/40 bg-[#ffd700]/5' : 'border-[#ff4757]/40 bg-[#ff4757]/5'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="font-semibold text-[#e8e8f0] text-sm">{paperMode ? '🛡️ Paper Trading' : '⚡ Live Trading'}</p>
+                  <p className="text-xs text-[#6b6b80] mt-0.5">{paperMode ? 'Simulated trades — no real funds at risk' : 'Real orders placed on exchange'}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    if (!paperMode) {
+                      if (!window.confirm('Switch to LIVE trading? Real orders will be placed on your exchange. Make sure your API keys and risk settings are correct.')) return
+                    }
+                    setPaperMode(!paperMode)
+                  }}
+                  className={`relative w-12 h-6 rounded-full transition-colors ${paperMode ? 'bg-[#ffd700]' : 'bg-[#ff4757]'}`}
+                >
+                  <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${paperMode ? 'translate-x-1' : 'translate-x-7'}`} />
+                </button>
+              </div>
+              {!paperMode && (
+                <div className="mt-2 p-2 bg-[#ff4757]/10 rounded-lg">
+                  <p className="text-xs text-[#ff4757]">⚠️ Live mode active. All trades with exec mode &quot;Auto&quot; will place real orders. Ensure your stop-losses and position sizes are correct.</p>
+                </div>
+              )}
+            </div>
+
             {/* Execution mode */}
             <div>
               <label className="block text-sm font-medium text-[#e8e8f0] mb-3">Execution Mode</label>
-              <div className="grid grid-cols-2 gap-3">
-                {(['manual', 'auto'] as const).map((mode) => (
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { mode: 'manual', icon: '🔔', label: 'Signal Only', desc: 'Bot generates signals, you trade manually', color: '#4f8ef7' },
+                  { mode: 'approval', icon: '✋', label: 'Approval', desc: 'Bot queues trades — you approve each one', color: '#ffd700' },
+                  { mode: 'auto', icon: '🤖', label: 'Auto', desc: 'Bot executes trades automatically', color: '#00d68f' },
+                ].map(({ mode, icon, label, desc, color }) => (
                   <button
                     key={mode}
-                    onClick={() => setExecMode(mode)}
-                    className={`p-4 rounded-xl border-2 text-left transition-all ${
-                      execMode === mode
-                        ? mode === 'auto'
-                          ? 'border-[#00d68f] bg-[#00d68f]/10'
-                          : 'border-[#4f8ef7] bg-[#4f8ef7]/10'
-                        : 'border-[#2a2a35] hover:border-[#3a3a48]'
-                    }`}
+                    onClick={() => {
+                      if (mode === 'auto' && !paperMode) {
+                        if (!window.confirm('⚠️ Auto mode with LIVE trading will place real orders without confirmation.\n\nAre you sure?')) return
+                      }
+                      setExecMode(mode as typeof execMode)
+                    }}
+                    className={`p-3 rounded-xl border-2 text-left transition-all ${execMode === mode ? 'bg-opacity-10' : 'border-[#2a2a35] hover:border-[#3a3a48]'}`}
+                    style={execMode === mode ? { borderColor: color, backgroundColor: `${color}18` } : {}}
                   >
-                    <div className="flex items-center gap-2 mb-1">
-                      <span>{mode === 'auto' ? '🤖' : '🔔'}</span>
-                      <span
-                        className={`font-semibold text-sm ${
-                          execMode === mode
-                            ? mode === 'auto' ? 'text-[#00d68f]' : 'text-[#4f8ef7]'
-                            : 'text-[#e8e8f0]'
-                        }`}
-                      >
-                        {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                      </span>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-base">{icon}</span>
+                      <span className="font-semibold text-xs" style={execMode === mode ? { color } : { color: '#e8e8f0' }}>{label}</span>
                     </div>
-                    <p className="text-xs text-[#6b6b80]">
-                      {mode === 'auto' ? 'Bot auto-executes signals' : 'Manual approval required'}
-                    </p>
+                    <p className="text-xs text-[#6b6b80] leading-tight">{desc}</p>
                   </button>
                 ))}
               </div>
+              {execMode === 'auto' && !paperMode && (
+                <div className="mt-2 p-2.5 bg-[#ff4757]/10 border border-[#ff4757]/20 rounded-lg">
+                  <p className="text-xs text-[#ff4757]">⚠️ Auto + Live: real orders will be placed without manual confirmation. Score ≥75 required.</p>
+                </div>
+              )}
+              {execMode === 'approval' && (
+                <div className="mt-2 p-2.5 bg-[#ffd700]/10 border border-[#ffd700]/20 rounded-lg">
+                  <p className="text-xs text-[#ffd700]">Signals appear in your dashboard approval queue. You approve or reject each trade before execution.</p>
+                </div>
+              )}
             </div>
 
             {/* Risk per trade */}
@@ -366,10 +401,10 @@ export default function SettingsPage() {
                 <label className="text-sm font-medium text-[#e8e8f0]">Risk Per Trade</label>
                 <span className="text-sm font-mono font-bold text-[#4f8ef7]">{riskPct}%</span>
               </div>
-              <input type="range" min="0.5" max="5" step="0.5" value={riskPct} onChange={(e) => setRiskPct(Number(e.target.value))} />
+              <input type="range" min="0.1" max="1" step="0.1" value={riskPct} onChange={(e) => setRiskPct(Number(e.target.value))} />
               <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
-                <span>0.5% (Conservative)</span>
-                <span>5% (Aggressive)</span>
+                <span>0.1% (Ultra-safe)</span>
+                <span>1% (Max — capital protection cap)</span>
               </div>
             </div>
 
@@ -392,10 +427,10 @@ export default function SettingsPage() {
                 <label className="text-sm font-medium text-[#e8e8f0]">Max Concurrent Positions</label>
                 <span className="text-sm font-mono font-bold text-[#4f8ef7]">{maxPositions}</span>
               </div>
-              <input type="range" min="1" max="10" step="1" value={maxPositions} onChange={(e) => setMaxPositions(Number(e.target.value))} />
+              <input type="range" min="1" max="3" step="1" value={maxPositions} onChange={(e) => setMaxPositions(Number(e.target.value))} />
               <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
-                <span>1 (Conservative)</span>
-                <span>10 (Aggressive)</span>
+                <span>1 (Focused)</span>
+                <span>3 (Max — capital protection cap)</span>
               </div>
             </div>
 
@@ -406,11 +441,12 @@ export default function SettingsPage() {
                   <label className="text-sm font-medium text-[#e8e8f0]">Leverage</label>
                   <span className="text-sm font-mono font-bold text-[#ffd700]">{leverage}x</span>
                 </div>
-                <input type="range" min="1" max="20" step="1" value={leverage} onChange={(e) => setLeverage(Number(e.target.value))} />
+                <input type="range" min="1" max="3" step="1" value={leverage} onChange={(e) => setLeverage(Number(e.target.value))} />
                 <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
-                  <span>1x</span>
-                  <span>20x</span>
+                  <span>1x (Spot-like)</span>
+                  <span>3x (Max safe — never higher)</span>
                 </div>
+                <p className="text-xs text-[#6b6b80] mt-1.5">High leverage causes liquidations. APEX enforces 3x maximum.</p>
               </div>
             )}
           </div>
@@ -418,14 +454,20 @@ export default function SettingsPage() {
 
         {/* Risk limits info */}
         <div className="bg-[#16161a] border border-[#2a2a35] rounded-2xl p-6 mb-4">
-          <h3 className="font-semibold text-[#e8e8f0] mb-4">Built-in Risk Limits</h3>
+          <h3 className="font-semibold text-[#e8e8f0] mb-4">Built-in Capital Protection Rules</h3>
+          <p className="text-xs text-[#6b6b80] mb-4">These limits cannot be disabled. They exist to protect your capital.</p>
           <div className="space-y-3">
             {[
-              { label: 'Daily Loss Limit', value: '5% of balance', color: '#ff4757' },
-              { label: 'Weekly Loss Limit', value: '10% of balance', color: '#ff4757' },
-              { label: 'Max Consecutive Losses', value: '4 trades', color: '#ffd700' },
-              { label: 'Position Sizing', value: 'Risk-adjusted (ATR-based)', color: '#4f8ef7' },
-              { label: 'Loss Scaling', value: '25–50% size reduction', color: '#4f8ef7' },
+              { label: 'Daily Loss Limit', value: '3% of balance', color: '#ff4757' },
+              { label: 'Weekly Loss Limit', value: '7% of balance', color: '#ff4757' },
+              { label: 'Max Consecutive Losses', value: '3 trades — then pause', color: '#ffd700' },
+              { label: 'Loss Cooldown', value: '30 min after each loss', color: '#ffd700' },
+              { label: 'Max Trades Per Day', value: '5 trades', color: '#4f8ef7' },
+              { label: 'Max Risk Per Trade', value: '1% hard cap', color: '#4f8ef7' },
+              { label: 'Minimum Signal Score', value: '75/100 required', color: '#00d68f' },
+              { label: 'Min Risk/Reward', value: '2:1 required', color: '#00d68f' },
+              { label: 'Max Futures Leverage', value: '3x hard cap', color: '#ffd700' },
+              { label: 'Position Sizing', value: 'ATR-based, score-adjusted', color: '#4f8ef7' },
             ].map((item) => (
               <div key={item.label} className="flex items-center justify-between py-2 border-b border-[#2a2a35]/50 last:border-0">
                 <span className="text-sm text-[#6b6b80]">{item.label}</span>

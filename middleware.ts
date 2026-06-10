@@ -12,14 +12,21 @@ const sessionOptions = {
   },
 }
 
-const PROTECTED_PATHS = ['/dashboard', '/trades', '/settings', '/congressional']
-const AUTH_PATHS = ['/onboard']
-const PUBLIC_PATHS = ['/', '/api/auth/setup', '/api/auth/logout']
+const PROTECTED_PATHS = ['/dashboard', '/trades', '/settings', '/congressional', '/deposit']
+const AUTH_PATHS = ['/onboard', '/login', '/register', '/claim']
+const PUBLIC_PATHS = [
+  '/',
+  '/api/auth/setup',
+  '/api/auth/logout',
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/claim',
+]
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname
 
-  // Allow API routes (except protected ones) and public assets
+  // Allow cron, static assets and public paths
   if (
     pathname.startsWith('/api/cron') ||
     pathname.startsWith('/_next') ||
@@ -29,7 +36,6 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // Check session for protected paths
   const isProtected = PROTECTED_PATHS.some((p) => pathname.startsWith(p))
   const isApiProtected = pathname.startsWith('/api/') && !PUBLIC_PATHS.includes(pathname)
 
@@ -40,19 +46,18 @@ export async function middleware(request: NextRequest) {
 
       if (!session.isSetup || !session.userId) {
         if (isProtected) {
-          return NextResponse.redirect(new URL('/onboard', request.url))
+          return NextResponse.redirect(new URL('/login', request.url))
         }
-        // For API routes, let the route handle auth errors
         return NextResponse.next()
       }
     } catch {
       if (isProtected) {
-        return NextResponse.redirect(new URL('/onboard', request.url))
+        return NextResponse.redirect(new URL('/login', request.url))
       }
     }
   }
 
-  // Redirect already-set-up users away from onboard
+  // Redirect authenticated users away from auth pages
   if (AUTH_PATHS.includes(pathname)) {
     try {
       const response = NextResponse.next()
@@ -60,16 +65,12 @@ export async function middleware(request: NextRequest) {
       if (session.isSetup && session.userId) {
         return NextResponse.redirect(new URL('/dashboard', request.url))
       }
-    } catch {
-      // Allow through if session check fails
-    }
+    } catch { /* allow through */ }
   }
 
   return NextResponse.next()
 }
 
 export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico).*)',
-  ],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 }

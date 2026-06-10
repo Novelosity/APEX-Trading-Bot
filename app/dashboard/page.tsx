@@ -10,17 +10,20 @@ import { TradingToggle } from '@/components/TradingToggle'
 import { TradeForm } from '@/components/TradeForm'
 import { PositionRow } from '@/components/PositionRow'
 import { SignalCard } from '@/components/SignalCard'
+import { ApprovalQueue } from '@/components/ApprovalQueue'
 import type { Trade, Signal, ChartDataPoint } from '@/lib/types'
 
 const LiveChart = dynamic(() => import('@/components/LiveChart').then((m) => ({ default: m.LiveChart })), { ssr: false })
 
 interface Settings {
   exchange: string
-  execMode: 'manual' | 'auto'
+  execMode: 'manual' | 'auto' | 'approval'
   riskPct: number
   balancePct: number
   maxPositions: number
   tradingMode: string
+  paperMode?: boolean
+  email?: string
 }
 
 interface Balance {
@@ -39,6 +42,22 @@ interface BotStateData {
   tradingHalted: boolean
 }
 
+interface MetricsData {
+  profitFactor: number | null
+  maxDrawdownPct: number
+  sharpeRatio: number | null
+  expectancyUsd: number
+  winCount: number
+  lossCount: number
+  totalTrades: number
+  currentStreak: number
+  currentStreakType: 'win' | 'loss' | 'none'
+  tradingHalted: boolean
+  haltReason?: string
+  paperMode: boolean
+  exchangeHealthy: boolean
+}
+
 export default function DashboardPage() {
   const router = useRouter()
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -47,6 +66,9 @@ export default function DashboardPage() {
   const [signals, setSignals] = useState<Signal[]>([])
   const [chartData, setChartData] = useState<ChartDataPoint[]>([])
   const [botState, _setBotState] = useState<BotStateData | null>(null)
+  const [metrics, setMetrics] = useState<MetricsData | null>(null)
+  const [pendingApprovals, setPendingApprovals] = useState<Signal[]>([])
+  const [killSwitchLoading, setKillSwitchLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [balanceLoading, setBalanceLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -69,18 +91,24 @@ export default function DashboardPage() {
   const fetchAll = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true)
     try {
-      const [settingsRes, positionsRes, signalsRes, chartRes] = await Promise.all([
+      const [settingsRes, positionsRes, signalsRes, chartRes, metricsRes] = await Promise.all([
         fetch('/api/settings'),
         fetch('/api/positions'),
         fetch('/api/signals'),
         fetch(`/api/chart?period=${chartPeriod}`),
+        fetch('/api/metrics'),
       ])
 
-      const [settingsData, positionsData, signalsData, chartResData] = await Promise.all([
+      const approvalsRes = await fetch('/api/bot/approve')
+      const approvalsData = await approvalsRes.json()
+      if (approvalsData.success) setPendingApprovals(approvalsData.data || [])
+
+      const [settingsData, positionsData, signalsData, chartResData, metricsData] = await Promise.all([
         settingsRes.json(),
         positionsRes.json(),
         signalsRes.json(),
         chartRes.json(),
+        metricsRes.json(),
       ])
 
       if (!settingsData.success) {
@@ -96,6 +124,7 @@ export default function DashboardPage() {
       }
       if (signalsData.success) setSignals(signalsData.data || [])
       if (chartResData.success) setChartData(chartResData.data || [])
+      if (metricsData.success) setMetrics(metricsData.data)
       setLastUpdate(new Date())
     } catch (err) {
       console.error('Fetch error:', err)
@@ -145,7 +174,7 @@ export default function DashboardPage() {
     if (!loading) fetchAll()
   }, [chartPeriod]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleToggleExecMode = async (mode: 'manual' | 'auto') => {
+  const handleToggleExecMode = async (mode: 'manual' | 'auto' | 'approval') => {
     const res = await fetch('/api/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -154,6 +183,25 @@ export default function DashboardPage() {
     const data = await res.json()
     if (data.success) {
       setSettings((prev) => prev ? { ...prev, execMode: mode } : prev)
+    }
+  }
+
+  const handleKillSwitch = async (action: 'halt' | 'resume') => {
+    setKillSwitchLoading(true)
+    try {
+      const res = await fetch('/api/bot/killswitch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setMetrics((prev) => prev ? { ...prev, tradingHalted: action === 'halt' } : prev)
+      }
+    } catch {
+      // silent fail
+    } finally {
+      setKillSwitchLoading(false)
     }
   }
 
@@ -169,13 +217,14 @@ export default function DashboardPage() {
     }
   }
 
-  const winRate = botState
-    ? botState.totalTrades > 0
-      ? Math.round((botState.winCount / botState.totalTrades) * 100)
-      : 0
-    : openTrades.length > 0
-    ? 50
+  const winRate = metrics && metrics.totalTrades > 0
+    ? Math.round((metrics.winCount / metrics.totalTrades) * 100)
+    : botState && botState.totalTrades > 0
+    ? Math.round((botState.winCount / botState.totalTrades) * 100)
     : 0
+
+  const isHalted = metrics?.tradingHalted ?? false
+  const isPaperMode = settings?.paperMode ?? false
 
   const totalPnl = chartData.length > 0 ? chartData[chartData.length - 1].cumulative : 0
   const dailyPnl = chartData.length > 0 ? chartData[chartData.length - 1].pnl : 0
@@ -204,6 +253,36 @@ export default function DashboardPage() {
       <Navbar exchange={settings?.exchange} />
 
       <main className="lg:ml-64 flex-1 p-4 lg:p-6 pt-20 lg:pt-6 min-w-0">
+        {/* Paper mode banner */}
+        {isPaperMode && (
+          <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-[#4f8ef7]/10 border border-[#4f8ef7]/30 rounded-xl">
+            <span className="text-lg">🧪</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-[#4f8ef7]">Paper Trading Mode</p>
+              <p className="text-xs text-[#6b6b80]">No real funds at risk. Trades are simulated with virtual balance.</p>
+            </div>
+            <a href="/settings" className="text-xs text-[#4f8ef7] hover:underline shrink-0">Switch to Live →</a>
+          </div>
+        )}
+
+        {/* Kill switch banner */}
+        {isHalted && (
+          <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-[#ff4757]/10 border border-[#ff4757]/30 rounded-xl">
+            <span className="text-lg">🛑</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-[#ff4757]">Trading Halted</p>
+              <p className="text-xs text-[#6b6b80]">{metrics?.haltReason || 'Emergency stop is active. No new positions will be opened.'}</p>
+            </div>
+            <button
+              onClick={() => handleKillSwitch('resume')}
+              disabled={killSwitchLoading}
+              className="shrink-0 px-3 py-1.5 bg-[#00d68f] text-black text-xs font-bold rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+            >
+              Resume Trading
+            </button>
+          </div>
+        )}
+
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -213,26 +292,38 @@ export default function DashboardPage() {
               {refreshing && <span className="ml-2 text-[#4f8ef7]">↻ Refreshing...</span>}
             </p>
           </div>
-          <button
-            onClick={() => fetchAll(true)}
-            disabled={refreshing}
-            className="flex items-center gap-2 px-4 py-2 bg-[#16161a] border border-[#2a2a35] rounded-xl text-sm text-[#6b6b80] hover:text-[#e8e8f0] hover:border-[#3a3a48] transition-colors disabled:opacity-50"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              className={refreshing ? 'animate-spin' : ''}
+          <div className="flex items-center gap-2">
+            {!isHalted && (
+              <button
+                onClick={() => handleKillSwitch('halt')}
+                disabled={killSwitchLoading}
+                className="flex items-center gap-1.5 px-3 py-2 bg-[#ff4757]/10 border border-[#ff4757]/30 rounded-xl text-xs font-semibold text-[#ff4757] hover:bg-[#ff4757]/20 transition-colors disabled:opacity-50"
+                title="Emergency stop — halts all new trades"
+              >
+                🛑 Kill Switch
+              </button>
+            )}
+            <button
+              onClick={() => fetchAll(true)}
+              disabled={refreshing}
+              className="flex items-center gap-2 px-4 py-2 bg-[#16161a] border border-[#2a2a35] rounded-xl text-sm text-[#6b6b80] hover:text-[#e8e8f0] hover:border-[#3a3a48] transition-colors disabled:opacity-50"
             >
-              <polyline points="1 4 1 10 7 10" />
-              <polyline points="23 20 23 14 17 14" />
-              <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
-            </svg>
-            Refresh
-          </button>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className={refreshing ? 'animate-spin' : ''}
+              >
+                <polyline points="1 4 1 10 7 10" />
+                <polyline points="23 20 23 14 17 14" />
+                <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
+              </svg>
+              Refresh
+            </button>
+          </div>
         </div>
 
         {/* Stats cards */}
@@ -298,6 +389,40 @@ export default function DashboardPage() {
           />
         </div>
 
+        {/* Advanced metrics row */}
+        {metrics && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-[#16161a] border border-[#2a2a35] rounded-2xl p-4">
+              <div className="text-xs text-[#6b6b80] mb-1">Profit Factor</div>
+              <div className={`text-xl font-bold font-mono ${metrics.profitFactor === null ? 'text-[#4a4a5a]' : metrics.profitFactor >= 1.5 ? 'text-[#00d68f]' : metrics.profitFactor >= 1 ? 'text-[#ffd700]' : 'text-[#ff4757]'}`}>
+                {metrics.profitFactor === null ? '—' : metrics.profitFactor.toFixed(2)}
+              </div>
+              <div className="text-xs text-[#4a4a5a] mt-0.5">gross profit / loss</div>
+            </div>
+            <div className="bg-[#16161a] border border-[#2a2a35] rounded-2xl p-4">
+              <div className="text-xs text-[#6b6b80] mb-1">Max Drawdown</div>
+              <div className={`text-xl font-bold font-mono ${metrics.maxDrawdownPct > 10 ? 'text-[#ff4757]' : metrics.maxDrawdownPct > 5 ? 'text-[#ffd700]' : 'text-[#00d68f]'}`}>
+                -{metrics.maxDrawdownPct.toFixed(1)}%
+              </div>
+              <div className="text-xs text-[#4a4a5a] mt-0.5">peak to trough</div>
+            </div>
+            <div className="bg-[#16161a] border border-[#2a2a35] rounded-2xl p-4">
+              <div className="text-xs text-[#6b6b80] mb-1">Sharpe Ratio</div>
+              <div className={`text-xl font-bold font-mono ${metrics.sharpeRatio === null ? 'text-[#4a4a5a]' : metrics.sharpeRatio >= 1 ? 'text-[#00d68f]' : metrics.sharpeRatio >= 0 ? 'text-[#ffd700]' : 'text-[#ff4757]'}`}>
+                {metrics.sharpeRatio === null ? '—' : metrics.sharpeRatio.toFixed(2)}
+              </div>
+              <div className="text-xs text-[#4a4a5a] mt-0.5">annualized</div>
+            </div>
+            <div className="bg-[#16161a] border border-[#2a2a35] rounded-2xl p-4">
+              <div className="text-xs text-[#6b6b80] mb-1">Expectancy</div>
+              <div className={`text-xl font-bold font-mono ${metrics.expectancyUsd >= 0 ? 'text-[#00d68f]' : 'text-[#ff4757]'}`}>
+                {metrics.expectancyUsd >= 0 ? '+' : ''}${metrics.expectancyUsd.toFixed(2)}
+              </div>
+              <div className="text-xs text-[#4a4a5a] mt-0.5">per trade avg</div>
+            </div>
+          </div>
+        )}
+
         {/* Live candlestick chart with indicators */}
         <div className="mb-6">
           <LiveChart pair="BTC/USDT" timeframe="1h" />
@@ -357,6 +482,14 @@ export default function DashboardPage() {
             />
           </div>
         </div>
+
+        {/* Approval queue — only shown when in approval mode */}
+        {settings?.execMode === 'approval' && pendingApprovals.length > 0 && (
+          <ApprovalQueue
+            signals={pendingApprovals}
+            onApproved={() => fetchAll(true)}
+          />
+        )}
 
         {/* Bottom row: Positions + Signals */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">

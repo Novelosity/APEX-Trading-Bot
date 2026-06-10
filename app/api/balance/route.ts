@@ -20,6 +20,7 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
+      exchange: session.exchange,
       data: {
         total: balance.total,
         free: balance.free,

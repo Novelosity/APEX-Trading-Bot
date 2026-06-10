@@ -104,12 +104,12 @@ export default function LandingPage() {
             <span className="text-lg font-bold tracking-tight text-[#e8e8f0]">APEX</span>
             <span className="text-xs bg-[#4f8ef7]/20 text-[#4f8ef7] px-2 py-0.5 rounded-full font-mono">BETA</span>
           </div>
-          <div className="flex items-center gap-4">
-            <Link
-              href="/onboard"
-              className="px-4 py-2 bg-[#4f8ef7] hover:bg-[#6aa0f9] text-white text-sm font-semibold rounded-lg transition-colors"
-            >
-              Start Trading
+          <div className="flex items-center gap-3">
+            <Link href="/login" className="px-4 py-2 text-[#6b6b80] hover:text-[#e8e8f0] text-sm font-semibold transition-colors">
+              Sign In
+            </Link>
+            <Link href="/register" className="px-4 py-2 bg-[#4f8ef7] hover:bg-[#6aa0f9] text-white text-sm font-semibold rounded-lg transition-colors">
+              Start Free
             </Link>
           </div>
         </div>

@@ -61,6 +61,23 @@ async function kvSmembers(key: string): Promise<string[]> {
   return existing ? JSON.parse(existing) : []
 }
 
+async function kvSrem(key: string, member: string): Promise<void> {
+  try {
+    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+      const { kv } = await import('@vercel/kv')
+      await kv.srem(key, member)
+      return
+    }
+  } catch {
+    // fall through
+  }
+  const existing = memStore.get(key)
+  if (existing) {
+    const set: string[] = JSON.parse(existing)
+    memStore.set(key, JSON.stringify(set.filter((m) => m !== member)))
+  }
+}
+
 async function kvLpush(key: string, value: string): Promise<void> {
   try {
     if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
@@ -118,6 +135,15 @@ export async function updateUser(userId: string, update: Partial<User>): Promise
   const updated = { ...user, ...update, updatedAt: new Date().toISOString() }
   await saveUser(updated)
   return updated
+}
+
+export async function getUserByEmail(email: string): Promise<User | null> {
+  const ids = await kvSmembers('users')
+  for (const id of ids) {
+    const user = await getUser(id)
+    if (user?.email?.toLowerCase() === email.toLowerCase()) return user
+  }
+  return null
 }
 
 // ─── Trades ───────────────────────────────────────────────────────────────────
@@ -216,6 +242,48 @@ export async function updateBotState(userId: string, update: Partial<BotState>):
   const updated = { ...current, ...update }
   await kvSet(`botstate:${userId}`, JSON.stringify(updated))
   return updated
+}
+
+// ─── Risk Tracking Helpers ────────────────────────────────────────────────────
+
+/** Get number of trades placed today (UTC date) */
+export async function getDailyTradeCount(userId: string): Promise<number> {
+  const today = new Date().toISOString().slice(0, 10)
+  const val = await kvGet(`daytrades:${userId}:${today}`)
+  return val ? parseInt(val, 10) : 0
+}
+
+/** Increment today's trade count */
+export async function incrementDailyTradeCount(userId: string): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10)
+  const key = `daytrades:${userId}:${today}`
+  const val = await kvGet(key)
+  await kvSet(key, String((val ? parseInt(val, 10) : 0) + 1))
+}
+
+/** Get timestamp of the last loss for cooldown check */
+export async function getLastLossAt(userId: string): Promise<string | null> {
+  return kvGet(`lastloss:${userId}`)
+}
+
+/** Set timestamp of the last loss */
+export async function setLastLossAt(userId: string, iso: string): Promise<void> {
+  await kvSet(`lastloss:${userId}`, iso)
+}
+
+/** Save a signal ID to the pending approval queue */
+export async function savePendingApproval(userId: string, signalId: string): Promise<void> {
+  await kvSadd(`pending_approvals:${userId}`, signalId)
+}
+
+/** Get all pending approval signal IDs */
+export async function getPendingApprovals(userId: string): Promise<string[]> {
+  return kvSmembers(`pending_approvals:${userId}`)
+}
+
+/** Remove a signal from the pending approval queue */
+export async function removePendingApproval(userId: string, signalId: string): Promise<void> {
+  await kvSrem(`pending_approvals:${userId}`, signalId)
 }
 
 // ─── Congressional Module ─────────────────────────────────────────────────────

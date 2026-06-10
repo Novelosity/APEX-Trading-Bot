@@ -56,7 +56,7 @@ export default function OnboardPage() {
       })
       const data = await res.json()
       if (!data.success) {
-        setError(data.error || 'Connection failed')
+        setError(data.error || 'Connection failed. Check your API keys and permissions.')
         return
       }
       setValidatedBalance(data.data.balance)

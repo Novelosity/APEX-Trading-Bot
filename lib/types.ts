@@ -1,11 +1,14 @@
 export interface User {
   id: string
+  email?: string
+  passwordHash?: string
   exchange: string
   apiKeyEnc: string
   apiSecretEnc: string
   apiPassphraseEnc?: string
   tradingMode: 'spot' | 'futures'
-  execMode: 'manual' | 'auto'
+  execMode: 'manual' | 'auto' | 'approval'
+  paperMode?: boolean
   leverage: number
   balancePct: number
   riskPct: number
@@ -36,6 +39,53 @@ export interface Trade {
   orderId?: string
 }
 
+export interface SignalReason {
+  indicator: string
+  description: string
+  contribution: number
+  bullish: boolean
+}
+
+/** Full position sizing and cost breakdown for a trade */
+export interface TradeSpec {
+  positionSizeUsd: number      // Total position value in USDT
+  quantityBase: number         // Amount in base currency
+  riskAmountUsd: number        // USD at risk (from balance * riskPct)
+  estimatedFeeUsd: number      // Round-trip fees (entry + exit)
+  estimatedSlippageUsd: number // Slippage estimate
+  maxLossUsd: number           // riskAmount + fees + slippage
+  leverage: number             // 1 for spot, user.leverage for futures
+  liquidationPrice?: number    // Futures only
+  scoreAdjustedRiskPct: number // Effective risk% after score adjustment
+}
+
+/** Backtest result summary */
+export interface BacktestResult {
+  pair: string
+  timeframe: string
+  totalTrades: number
+  winCount: number
+  lossCount: number
+  winRate: number
+  profitFactor: number | null
+  netPnlPct: number
+  maxDrawdownPct: number
+  sharpeRatio: number | null
+  expectancyPct: number
+  avgWinPct: number
+  avgLossPct: number
+  bestTradePct: number
+  worstTradePct: number
+  consecutiveLossesMax: number
+  startDate: string
+  endDate: string
+  totalBars: number
+  signalsGenerated: number
+  feePct: number
+  slippagePct: number
+  passedFilter: boolean
+}
+
 export interface Signal {
   id: string
   userId: string
@@ -48,8 +98,19 @@ export interface Signal {
   tp2: number
   tp3: number
   sl: number
+  riskReward?: number
   timeframe: string
   timeframesAligned: string[]
+  timeframesChecked?: string[]
+  reasons?: SignalReason[]
+  marketRegime?: 'trending' | 'ranging' | 'volatile'
+  invalidationConditions?: string[]
+  modelVersion?: string
+  tradeSpec?: TradeSpec
+  // Approval workflow
+  pendingApproval?: boolean
+  approvalExpiresAt?: string
+  rejectedAt?: string
   executed: boolean
   executedTradeId?: string
   createdAt: string
@@ -61,6 +122,7 @@ export interface BotState {
   weeklyPnl: number
   tradingHalted: boolean
   haltReason?: string
+  killSwitchAt?: string
   consecutiveLosses: number
   lastTradeAt?: string
   totalTrades: number
@@ -80,6 +142,7 @@ export interface ExchangeInfo {
 export interface SessionData {
   userId: string
   exchange: string
+  email?: string
   isSetup: boolean
 }
 

@@ -1,15 +1,17 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
-import { randomUUID } from 'crypto'
 import { encrypt } from '@/lib/crypto'
-import { saveUser } from '@/lib/storage'
-import { getSession } from '@/lib/session'
-import type { User } from '@/lib/types'
+import { updateUser } from '@/lib/storage'
+import { getSession, requireSession } from '@/lib/session'
 import { ExchangeClient } from '@/lib/exchange'
+import type { User } from '@/lib/types'
 
 export async function POST(request: NextRequest) {
   try {
+    // Require existing session (account must exist before connecting exchange)
+    const session = await requireSession()
+
     const body = await request.json()
     const { exchange, apiKey, apiSecret, apiPassphrase, tradingMode, leverage } = body
 
@@ -17,16 +19,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing required fields' }, { status: 400 })
     }
 
-    const userId = randomUUID()
+    if (typeof apiKey !== 'string' || apiKey.length > 512) {
+      return NextResponse.json({ success: false, error: 'Invalid API key' }, { status: 400 })
+    }
+    if (typeof apiSecret !== 'string' || apiSecret.length > 512) {
+      return NextResponse.json({ success: false, error: 'Invalid API secret' }, { status: 400 })
+    }
 
-    // Encrypt API keys
-    const apiKeyEnc = encrypt(apiKey)
-    const apiSecretEnc = encrypt(apiSecret)
-    const apiPassphraseEnc = apiPassphrase ? encrypt(apiPassphrase) : undefined
+    const apiKeyEnc = encrypt(apiKey.trim())
+    const apiSecretEnc = encrypt(apiSecret.trim())
+    const apiPassphraseEnc = apiPassphrase ? encrypt(apiPassphrase.trim()) : undefined
 
-    // Create temporary user to validate connection
+    // Validate by fetching balance using a temp user object
     const tempUser: User = {
-      id: userId,
+      id: session.userId,
       exchange,
       apiKeyEnc,
       apiSecretEnc,
@@ -41,28 +47,35 @@ export async function POST(request: NextRequest) {
       updatedAt: new Date().toISOString(),
     }
 
-    // Validate by fetching balance
     const client = new ExchangeClient(tempUser)
     const balance = await client.fetchBalance()
 
     if (balance.total < 0) {
-      return NextResponse.json({ success: false, error: 'Could not fetch balance — check API keys' }, { status: 400 })
+      return NextResponse.json(
+        { success: false, error: 'Could not fetch balance — check your API keys and permissions.' },
+        { status: 400 }
+      )
     }
 
-    // Save user
-    await saveUser(tempUser)
+    // Update the existing user with exchange credentials
+    await updateUser(session.userId, {
+      exchange,
+      apiKeyEnc,
+      apiSecretEnc,
+      ...(apiPassphraseEnc ? { apiPassphraseEnc } : {}),
+      tradingMode: tradingMode || 'spot',
+      leverage: leverage || 1,
+    })
 
-    // Set session
-    const session = await getSession()
-    session.userId = userId
-    session.exchange = exchange
-    session.isSetup = true
-    await session.save()
+    // Update session exchange
+    const updatedSession = await getSession()
+    updatedSession.exchange = exchange
+    await updatedSession.save()
 
     return NextResponse.json({
       success: true,
       data: {
-        userId,
+        exchange,
         balance: balance.free,
         currency: 'USDT',
       },

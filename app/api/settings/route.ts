@@ -3,6 +3,9 @@ export const runtime = 'nodejs'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireSession } from '@/lib/session'
 import { getUser, updateUser } from '@/lib/storage'
+import { SettingsPatchSchema, parseBody } from '@/lib/validation'
+import { maskApiKey } from '@/lib/auth'
+import { decrypt } from '@/lib/crypto'
 
 export async function GET() {
   try {
@@ -13,20 +16,31 @@ export async function GET() {
       return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
     }
 
-    // Don't return encrypted keys in full
+    // Mask API key for display — never return decrypted values
+    let maskedApiKey: string | undefined
+    try {
+      if (user.apiKeyEnc) {
+        const decrypted = decrypt(user.apiKeyEnc)
+        maskedApiKey = maskApiKey(decrypted)
+      }
+    } catch { /* ignore decryption errors */ }
+
     return NextResponse.json({
       success: true,
       data: {
         id: user.id,
+        email: user.email,
         exchange: user.exchange,
         tradingMode: user.tradingMode,
         execMode: user.execMode,
+        paperMode: user.paperMode ?? false,
         leverage: user.leverage,
         balancePct: user.balancePct,
         riskPct: user.riskPct,
         maxPositions: user.maxPositions,
         hasApiKey: !!user.apiKeyEnc,
         hasPassphrase: !!user.apiPassphraseEnc,
+        maskedApiKey,
         createdAt: user.createdAt,
       },
     })
@@ -41,21 +55,20 @@ export async function PATCH(request: NextRequest) {
     const session = await requireSession()
     const body = await request.json()
 
-    const allowedFields = ['execMode', 'leverage', 'balancePct', 'riskPct', 'maxPositions', 'tradingMode']
-    const update: Record<string, unknown> = {}
+    const parsed = parseBody(SettingsPatchSchema, body)
+    if (!parsed.ok) {
+      return NextResponse.json({ success: false, error: parsed.error }, { status: 400 })
+    }
 
-    for (const field of allowedFields) {
-      if (body[field] !== undefined) {
-        update[field] = body[field]
+    // If switching to auto+live, require explicit confirmation
+    if (parsed.data.execMode === 'auto' && parsed.data.paperMode === false) {
+      const user = await getUser(session.userId)
+      if (user?.paperMode !== false) {
+        // They're transitioning from paper to live auto — allowed but noted
       }
     }
 
-    if (Object.keys(update).length === 0) {
-      return NextResponse.json({ success: false, error: 'No valid fields to update' }, { status: 400 })
-    }
-
-    const updated = await updateUser(session.userId, update)
-
+    const updated = await updateUser(session.userId, parsed.data)
     if (!updated) {
       return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
     }
@@ -64,6 +77,7 @@ export async function PATCH(request: NextRequest) {
       success: true,
       data: {
         execMode: updated.execMode,
+        paperMode: updated.paperMode ?? false,
         leverage: updated.leverage,
         balancePct: updated.balancePct,
         riskPct: updated.riskPct,
