@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { Navbar } from '@/components/Navbar'
 import { BalanceCard } from '@/components/BalanceCard'
 import { PnLChart } from '@/components/PnLChart'
@@ -10,6 +11,8 @@ import { TradeForm } from '@/components/TradeForm'
 import { PositionRow } from '@/components/PositionRow'
 import { SignalCard } from '@/components/SignalCard'
 import type { Trade, Signal, ChartDataPoint } from '@/lib/types'
+
+const LiveChart = dynamic(() => import('@/components/LiveChart').then((m) => ({ default: m.LiveChart })), { ssr: false })
 
 interface Settings {
   exchange: string
@@ -268,6 +271,11 @@ export default function DashboardPage() {
             }
             color={winRate >= 50 ? '#00d68f' : '#ff4757'}
           />
+        </div>
+
+        {/* Live candlestick chart with indicators */}
+        <div className="mb-6">
+          <LiveChart pair="BTC/USDT" timeframe="1h" />
         </div>
 
         {/* Middle row: Chart + Trading controls */}

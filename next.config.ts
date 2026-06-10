@@ -2,6 +2,7 @@ import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  transpilePackages: ['lightweight-charts'],
   experimental: {
     serverActions: {
       allowedOrigins: ['localhost:3000'],
