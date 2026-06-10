@@ -1,8 +1,7 @@
 {
   "crons": [
-    { "path": "/api/cron/scan", "schedule": "0 0 * * *" },
-    { "path": "/api/cron/execute", "schedule": "0 1 * * *" },
-    { "path": "/api/cron/monitor", "schedule": "0 2 * * *" },
+    { "path": "/api/cron/scan", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/monitor", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/congressional", "schedule": "0 14 * * 1-5" }
   ]
 }

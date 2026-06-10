@@ -13,6 +13,20 @@ export async function GET(request: Request) {
   }
 
   try {
+    // Reset daily P&L for all users if we're in a new UTC day
+    const todayUTC = new Date().toISOString().slice(0, 10) // "YYYY-MM-DD"
+    try {
+      const { getAllUsers, getBotState: getBS, updateBotState: updateBS } = await import('@/lib/storage').then(m => m)
+      const allUsers = await getAllUsers()
+      for (const u of allUsers) {
+        const bs = await getBS(u.id)
+        const lastReset = (bs as any).lastDailyResetAt?.slice(0, 10)
+        if (lastReset !== todayUTC) {
+          await updateBS(u.id, { dailyPnl: 0, lastDailyResetAt: todayUTC } as any)
+        }
+      }
+    } catch { /* non-critical */ }
+
     const openTrades = await getAllOpenTrades()
 
     if (openTrades.length === 0) {

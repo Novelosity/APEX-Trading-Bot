@@ -3,7 +3,7 @@ export const preferredRegion = 'fra1'
 
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
-import { getAllUsers, saveSignal, getAllSignalSources, saveExternalSignal } from '@/lib/storage'
+import { getAllUsers, saveSignal, getAllSignalSources, saveExternalSignal, getSignals, saveTrade, markSignalExecuted, updateBotState, getOpenTrades, getBotState } from '@/lib/storage'
 import { ExchangeClient } from '@/lib/exchange'
 import type { OHLCVCandle } from '@/lib/exchange'
 import { generateSignal } from '@/lib/signals'
@@ -14,7 +14,14 @@ import {
   analyzeSocialSentiment,
   calculateEnhancedSignal
 } from '@/lib/signal-providers'
-import type { Signal, SignalSource } from '@/lib/types'
+import { calculatePositionSize, checkCanTrade } from '@/lib/risk'
+import type { Signal, SignalSource, Trade } from '@/lib/types'
+
+const PAIRS_ATR_APPROX: Record<string, number> = {
+  'BTC/USDT': 800, 'ETH/USDT': 45, 'SOL/USDT': 3.5, 'LTC/USDT': 2.5,
+  'BNB/USDT': 8, 'ADA/USDT': 0.002, 'MATIC/USDT': 0.05, 'LINK/USDT': 0.5,
+  'AVAX/USDT': 2.5, 'ATOM/USDT': 1.2, 'DOT/USDT': 0.8, 'ARB/USDT': 0.15, 'OP/USDT': 0.4,
+}
 
 const SCAN_PAIRS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'LTC/USDT', 'BNB/USDT', 'ADA/USDT', 'MATIC/USDT', 'LINK/USDT', 'AVAX/USDT', 'ATOM/USDT', 'DOT/USDT', 'ARB/USDT', 'OP/USDT']
 const TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d', '1w']
@@ -203,16 +210,16 @@ export async function GET(request: Request) {
 
   try {
     const users = await getAllUsers()
-    const autoUsers = users.filter((u) => u.execMode === 'auto')
-
-    if (autoUsers.length === 0) {
-      return NextResponse.json({ success: true, message: 'No auto-mode users', scanned: 0 })
+    if (users.length === 0) {
+      return NextResponse.json({ success: true, message: 'No users', scanned: 0 })
     }
 
-    const firstUser = autoUsers[0]
-    const client = new ExchangeClient(firstUser)
+    // Use first user's exchange for OHLCV (public data only)
+    const primaryUser = users[0]
+    const client = new ExchangeClient(primaryUser)
 
     let signalsFound = 0
+    let executedCount = 0
     const externalSignals: Signal[] = []
 
     for (const pair of SCAN_PAIRS) {
@@ -230,16 +237,70 @@ export async function GET(request: Request) {
 
         const signalSources = await getAllSignalSources()
         const enabledSources = signalSources.filter((s) => s.enabled)
-
         for (const source of enabledSources) {
           await processSignalSource(source, pair, closesByTF, candlesByTF, externalSignals)
         }
 
-        for (const user of autoUsers) {
+        // Generate signals for ALL users (not just auto)
+        for (const user of users) {
           const signal = generateSignal(user.id, pair, candlesByTF)
           if (signal && signal.score >= 70) {
             await saveSignal(signal)
             signalsFound++
+
+            // Immediately execute for auto-mode users
+            if (user.execMode === 'auto' && (signal.tier === 'HIGH' || signal.tier === 'ULTRA_HIGH')) {
+              try {
+                const userClient = new ExchangeClient(user)
+                const openTrades = await getOpenTrades(user.id)
+                const balanceData = await userClient.fetchBalance()
+                const availableBalance = balanceData.free * (user.balancePct / 100)
+
+                const canCheck = await checkCanTrade(user.id, signal.pair, signal.direction, openTrades, user, availableBalance)
+                if (!canCheck.allowed) continue
+
+                const ticker = await userClient.fetchTicker(signal.pair)
+                const entry = ticker.last || signal.entry
+                if (!entry || entry === 0) continue
+
+                const atr = PAIRS_ATR_APPROX[signal.pair] || entry * 0.01
+                const botState = await getBotState(user.id)
+                const positionSize = calculatePositionSize(availableBalance, user.riskPct, entry,
+                  signal.direction === 'long' ? entry - atr * 1.5 : entry + atr * 1.5,
+                  botState.consecutiveLosses
+                )
+
+                let sl: number, tp1: number, tp2: number, tp3: number
+                if (signal.direction === 'long') {
+                  sl = entry - atr * 1.5; tp1 = entry + atr * 2.25; tp2 = entry + atr * 3.75; tp3 = entry + atr * 6.0
+                } else {
+                  sl = entry + atr * 1.5; tp1 = entry - atr * 2.25; tp2 = entry - atr * 3.75; tp3 = entry - atr * 6.0
+                }
+
+                const trade: Trade = {
+                  id: randomUUID(), userId: user.id, pair: signal.pair,
+                  direction: signal.direction, entryPrice: entry, positionSize,
+                  slPrice: sl, tp1Price: tp1, tp2Price: tp2, tp3Price: tp3,
+                  status: 'open', openedAt: new Date().toISOString(),
+                }
+
+                if (user.tradingMode === 'futures') {
+                  await userClient.setLeverage(signal.pair, user.leverage)
+                }
+
+                const side = signal.direction === 'long' ? 'buy' : 'sell'
+                const order = await userClient.createMarketOrder(signal.pair, side, positionSize / entry)
+                trade.orderId = order.id
+                trade.entryPrice = order.price || entry
+
+                await saveTrade(trade)
+                await markSignalExecuted(signal.id, trade.id)
+                await updateBotState(user.id, { totalTrades: botState.totalTrades + 1, lastTradeAt: new Date().toISOString() })
+                executedCount++
+              } catch (execErr) {
+                console.error(`Auto-execute failed for ${user.id} on ${pair}:`, execErr)
+              }
+            }
           }
         }
       } catch {
@@ -249,7 +310,7 @@ export async function GET(request: Request) {
       await new Promise((r) => setTimeout(r, 300))
     }
 
-    // Save external signals to storage
+    // Save external signals
     for (const extSignal of externalSignals) {
       await saveSignal(extSignal)
     }
@@ -258,8 +319,9 @@ export async function GET(request: Request) {
       success: true,
       message: `Scanned ${SCAN_PAIRS.length} pairs`,
       signalsFound,
+      executedCount,
       externalSignalsAdded: externalSignals.length,
-      usersScanned: autoUsers.length,
+      usersScanned: users.length,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Scan failed'

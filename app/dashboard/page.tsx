@@ -52,6 +52,19 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [chartPeriod, setChartPeriod] = useState<'7d' | '30d'>('30d')
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({})
+
+  const fetchPrices = useCallback(async (trades: Trade[]) => {
+    const pairs = [...new Set(trades.map((t) => t.pair))]
+    if (pairs.length === 0) return
+    try {
+      const res = await fetch(`/api/prices?pairs=${pairs.map(encodeURIComponent).join(',')}`)
+      const data = await res.json()
+      if (data.success) setLivePrices(data.data)
+    } catch {
+      // silent fail
+    }
+  }, [])
 
   const fetchAll = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true)
@@ -76,7 +89,11 @@ export default function DashboardPage() {
       }
 
       setSettings(settingsData.data)
-      if (positionsData.success) setOpenTrades(positionsData.data || [])
+      if (positionsData.success) {
+        const trades = positionsData.data || []
+        setOpenTrades(trades)
+        fetchPrices(trades)
+      }
       if (signalsData.success) setSignals(signalsData.data || [])
       if (chartResData.success) setChartData(chartResData.data || [])
       setLastUpdate(new Date())
@@ -86,7 +103,7 @@ export default function DashboardPage() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [router, chartPeriod])
+  }, [router, chartPeriod, fetchPrices])
 
   const fetchBalance = useCallback(async () => {
     setBalanceLoading(true)
@@ -114,6 +131,14 @@ export default function DashboardPage() {
     }, 30000)
     return () => clearInterval(interval)
   }, [fetchAll, fetchBalance])
+
+  // Live price refresh every 10 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (openTrades.length > 0) fetchPrices(openTrades)
+    }, 10000)
+    return () => clearInterval(interval)
+  }, [openTrades, fetchPrices])
 
   // Refetch chart when period changes
   useEffect(() => {
@@ -379,6 +404,7 @@ export default function DashboardPage() {
                       <PositionRow
                         key={trade.id}
                         trade={trade}
+                        currentPrice={livePrices[trade.pair]}
                         onClose={handleCloseTrade}
                       />
                     ))}
