@@ -34,21 +34,28 @@ function callCron(path) {
 
 // Track last run times
 let lastScan = 0
+let lastExecute = 0
 let lastMonitor = 0
 
 async function tick() {
   const now = Date.now()
 
-  // Scan every 15 minutes
+  // Scan every 15 minutes (generates signals)
   if (now - lastScan >= 15 * 60 * 1000) {
     lastScan = now
     callCron('/api/cron/scan').catch(() => {})
   }
 
+  // Execute every 5 minutes (processes auto trades)
+  if (now - lastExecute >= 5 * 60 * 1000) {
+    lastExecute = now
+    callCron('/api/cron/execute').catch(() => {} )
+  }
+
   // Monitor every 5 minutes
   if (now - lastMonitor >= 5 * 60 * 1000) {
     lastMonitor = now
-    callCron('/api/cron/monitor').catch(() => {})
+    callCron('/api/cron/monitor').catch(() => {} )
   }
 }
 
@@ -64,6 +71,7 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({
     ok: true,
     lastScan: new Date(lastScan).toISOString(),
+    lastExecute: new Date(lastExecute).toISOString(),
     lastMonitor: new Date(lastMonitor).toISOString(),
   }))
 })

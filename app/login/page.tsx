@@ -23,7 +23,8 @@ export default function LoginPage() {
       })
       const data = await res.json()
       if (!data.success) { setError(data.error || 'Login failed'); return }
-      router.push('/dashboard')
+      // New users without an exchange go to onboarding; returning users go to dashboard
+      router.push(data.data?.hasExchange ? '/dashboard' : '/onboard')
     } catch { setError('Network error — please try again') }
     finally { setLoading(false) }
   }

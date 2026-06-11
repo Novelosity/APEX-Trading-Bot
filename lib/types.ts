@@ -6,7 +6,7 @@ export interface User {
   apiKeyEnc: string
   apiSecretEnc: string
   apiPassphraseEnc?: string
-  tradingMode: 'spot' | 'futures'
+  tradingMode: 'spot' | 'futures' | 'both'
   execMode: 'manual' | 'auto' | 'approval'
   paperMode?: boolean
   leverage: number
@@ -142,6 +142,8 @@ export interface ExchangeInfo {
 export interface SessionData {
   userId: string
   exchange: string
+  tradingMode?: 'spot' | 'futures' | 'both'
+  leverage?: number
   email?: string
   isSetup: boolean
 }

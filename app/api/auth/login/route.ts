@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     session.isSetup = true
     await session.save()
 
-    return NextResponse.json({ success: true, data: { userId: user.id } })
+    return NextResponse.json({ success: true, data: { userId: user.id, hasExchange: !!user.exchange } })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Login failed'
     console.error('Login error:', error)

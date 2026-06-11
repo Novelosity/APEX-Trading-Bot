@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { EXCHANGES, EXCHANGE_API_GUIDES } from '@/lib/exchanges'
@@ -17,15 +17,27 @@ export default function OnboardPage() {
   const [showKey, setShowKey] = useState(false)
   const [showSecret, setShowSecret] = useState(false)
   const [showPassphrase, setShowPassphrase] = useState(false)
-  const [tradingMode, setTradingMode] = useState<'spot' | 'futures'>('spot')
-  const [leverage, setLeverage] = useState(5)
+  const [tradingMode, setTradingMode] = useState<'spot' | 'futures' | 'both'>('spot')
+  const [leverage, setLeverage] = useState(3)
   const [riskPct, setRiskPct] = useState(1)
   const [balancePct, setBalancePct] = useState(100)
-  const [maxPositions, setMaxPositions] = useState(5)
-  const [execMode, setExecMode] = useState<'manual' | 'auto'>('manual')
+  const [maxPositions, setMaxPositions] = useState(3)
+  const [execMode, setExecMode] = useState<'manual' | 'auto' | 'approval'>('approval')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [validatedBalance, setValidatedBalance] = useState<number | null>(null)
+
+  // If user already has exchange configured, skip to dashboard
+  useEffect(() => {
+    fetch('/api/settings')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.data?.exchange) {
+          router.replace('/dashboard')
+        }
+      })
+      .catch(() => {})
+  }, [router])
 
   const exchange = EXCHANGES.find((e) => e.id === selectedExchange)
   const guide = selectedExchange ? EXCHANGE_API_GUIDES[selectedExchange] : null
@@ -363,25 +375,31 @@ export default function OnboardPage() {
                 {/* Trading Mode */}
                 <div>
                   <label className="block text-sm font-medium text-[#e8e8f0] mb-2">Trading Mode</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    {(['spot', 'futures'] as const).map((mode) => (
+                  <div className="grid grid-cols-3 gap-2">
+                    {([
+                      { value: 'spot', label: 'Spot', icon: '💱', desc: 'Buy/sell crypto directly' },
+                      { value: 'futures', label: 'Futures', icon: '📈', desc: 'Leveraged contracts' },
+                      { value: 'both', label: 'Both', icon: '⚡', desc: 'Spot + Futures simultaneously' },
+                    ] as const).map(({ value, label, icon, desc }) => (
                       <button
-                        key={mode}
-                        onClick={() => setTradingMode(mode)}
-                        className={`py-3 rounded-xl border-2 font-semibold capitalize transition-all ${
-                          tradingMode === mode
-                            ? 'border-[#4f8ef7] bg-[#4f8ef7]/10 text-[#4f8ef7]'
-                            : 'border-[#2a2a35] text-[#6b6b80] hover:border-[#3a3a48]'
+                        key={value}
+                        onClick={() => setTradingMode(value)}
+                        className={`p-3 rounded-xl border-2 text-left transition-all ${
+                          tradingMode === value
+                            ? 'border-[#4f8ef7] bg-[#4f8ef7]/10'
+                            : 'border-[#2a2a35] hover:border-[#3a3a48]'
                         }`}
                       >
-                        {mode}
+                        <div className="text-lg mb-1">{icon}</div>
+                        <div className={`text-xs font-bold ${tradingMode === value ? 'text-[#4f8ef7]' : 'text-[#e8e8f0]'}`}>{label}</div>
+                        <div className="text-xs text-[#6b6b80] mt-0.5 leading-tight">{desc}</div>
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {/* Leverage (futures only) */}
-                {tradingMode === 'futures' && (
+                {/* Leverage (futures or both) */}
+                {(tradingMode === 'futures' || tradingMode === 'both') && (
                   <div>
                     <label className="block text-sm font-medium text-[#e8e8f0] mb-2">
                       Leverage: <span className="text-[#4f8ef7] font-mono">{leverage}x</span>
@@ -395,9 +413,9 @@ export default function OnboardPage() {
                       className="w-full"
                     />
                     <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
-                      <span>1x</span>
+                      <span>1x (safe)</span>
                       <span>10x</span>
-                      <span>20x</span>
+                      <span>20x (max)</span>
                     </div>
                   </div>
                 )}
@@ -426,7 +444,7 @@ export default function OnboardPage() {
             </div>
           )}
 
-          {/* ── Step 4: Configure Settings ──────────────────────────────────── */}
+          {/* ── Step 4: Activate Bot ────────────────────────────────────────── */}
           {step === 4 && (
             <div>
               <div className="flex items-center gap-3 mb-2">
@@ -436,7 +454,7 @@ export default function OnboardPage() {
                   </svg>
                 </div>
                 <div>
-                  <h1 className="text-3xl font-bold text-[#e8e8f0]">Connected!</h1>
+                  <h1 className="text-3xl font-bold text-[#e8e8f0]">Exchange Connected!</h1>
                   {validatedBalance !== null && (
                     <p className="text-[#00d68f] text-sm font-mono">
                       Balance: ${validatedBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} USDT
@@ -444,30 +462,50 @@ export default function OnboardPage() {
                   )}
                 </div>
               </div>
-              <p className="text-[#6b6b80] mb-8">Configure your trading parameters.</p>
+              <p className="text-[#6b6b80] mb-6">Set your risk parameters and activate the bot.</p>
 
-              <div className="space-y-6 mb-8">
+              {/* Bot mode selection */}
+              <div className="bg-[#16161a] border border-[#2a2a35] rounded-xl p-5 mb-4">
+                <label className="block font-semibold text-[#e8e8f0] mb-4">How should the bot trade?</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { mode: 'manual', icon: '🔔', label: 'Signals Only', desc: 'Bot alerts you — you trade manually', color: '#4f8ef7' },
+                    { mode: 'approval', icon: '✋', label: 'Approval Mode', desc: 'Bot queues trades — you approve each one', color: '#ffd700' },
+                    { mode: 'auto', icon: '🤖', label: 'Full Auto', desc: 'Bot places trades automatically', color: '#00d68f' },
+                  ].map(({ mode, icon, label, desc, color }) => (
+                    <button
+                      key={mode}
+                      onClick={() => setExecMode(mode as typeof execMode)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all`}
+                      style={execMode === mode
+                        ? { borderColor: color, backgroundColor: `${color}18` }
+                        : { borderColor: '#2a2a35' }}
+                    >
+                      <div className="text-xl mb-1">{icon}</div>
+                      <div className="text-xs font-bold" style={execMode === mode ? { color } : { color: '#e8e8f0' }}>{label}</div>
+                      <div className="text-xs text-[#6b6b80] mt-0.5 leading-tight">{desc}</div>
+                    </button>
+                  ))}
+                </div>
+                {execMode === 'auto' && (
+                  <div className="mt-3 p-3 bg-[#ffd700]/10 border border-[#ffd700]/30 rounded-lg">
+                    <p className="text-xs text-[#ffd700]">⚠️ Auto mode places real trades on your exchange. Starts in paper mode — switch to live in Settings.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4 mb-6">
                 {/* Risk per trade */}
                 <div className="bg-[#16161a] border border-[#2a2a35] rounded-xl p-5">
                   <div className="flex justify-between mb-3">
                     <label className="font-medium text-[#e8e8f0]">Risk Per Trade</label>
                     <span className="font-mono font-bold text-[#4f8ef7]">{riskPct}%</span>
                   </div>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="5"
-                    step="0.5"
-                    value={riskPct}
-                    onChange={(e) => setRiskPct(Number(e.target.value))}
-                  />
+                  <input type="range" min="0.1" max="5" step="0.1" value={riskPct} onChange={(e) => setRiskPct(Number(e.target.value))} className="w-full" />
                   <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
-                    <span>0.5% (Conservative)</span>
+                    <span>0.1% (Ultra-safe)</span>
                     <span>5% (Aggressive)</span>
                   </div>
-                  <p className="text-xs text-[#6b6b80] mt-2">
-                    Max loss per trade. Position size is auto-calculated based on stop distance.
-                  </p>
                 </div>
 
                 {/* Balance to use */}
@@ -476,14 +514,7 @@ export default function OnboardPage() {
                     <label className="font-medium text-[#e8e8f0]">Balance to Use</label>
                     <span className="font-mono font-bold text-[#4f8ef7]">{balancePct}%</span>
                   </div>
-                  <input
-                    type="range"
-                    min="10"
-                    max="100"
-                    step="5"
-                    value={balancePct}
-                    onChange={(e) => setBalancePct(Number(e.target.value))}
-                  />
+                  <input type="range" min="10" max="100" step="5" value={balancePct} onChange={(e) => setBalancePct(Number(e.target.value))} className="w-full" />
                   <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
                     <span>10%</span>
                     <span>100%</span>
@@ -496,64 +527,11 @@ export default function OnboardPage() {
                     <label className="font-medium text-[#e8e8f0]">Max Concurrent Positions</label>
                     <span className="font-mono font-bold text-[#4f8ef7]">{maxPositions}</span>
                   </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    step="1"
-                    value={maxPositions}
-                    onChange={(e) => setMaxPositions(Number(e.target.value))}
-                  />
+                  <input type="range" min="1" max="10" step="1" value={maxPositions} onChange={(e) => setMaxPositions(Number(e.target.value))} className="w-full" />
                   <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
                     <span>1</span>
                     <span>10</span>
                   </div>
-                </div>
-
-                {/* Execution Mode */}
-                <div className="bg-[#16161a] border border-[#2a2a35] rounded-xl p-5">
-                  <label className="block font-medium text-[#e8e8f0] mb-4">Execution Mode</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      onClick={() => setExecMode('manual')}
-                      className={`p-4 rounded-xl border-2 text-left transition-all ${
-                        execMode === 'manual'
-                          ? 'border-[#4f8ef7] bg-[#4f8ef7]/10'
-                          : 'border-[#2a2a35] hover:border-[#3a3a48]'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-lg">🔔</span>
-                        <span className={`font-semibold ${execMode === 'manual' ? 'text-[#4f8ef7]' : 'text-[#e8e8f0]'}`}>
-                          Manual
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#6b6b80]">Signals only — you approve each trade</p>
-                    </button>
-                    <button
-                      onClick={() => setExecMode('auto')}
-                      className={`p-4 rounded-xl border-2 text-left transition-all ${
-                        execMode === 'auto'
-                          ? 'border-[#00d68f] bg-[#00d68f]/10'
-                          : 'border-[#2a2a35] hover:border-[#3a3a48]'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-lg">🤖</span>
-                        <span className={`font-semibold ${execMode === 'auto' ? 'text-[#00d68f]' : 'text-[#e8e8f0]'}`}>
-                          Auto
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#6b6b80]">Bot trades ULTRA_HIGH signals automatically</p>
-                    </button>
-                  </div>
-                  {execMode === 'auto' && (
-                    <div className="mt-3 p-3 bg-[#ffd700]/10 border border-[#ffd700]/30 rounded-lg">
-                      <p className="text-xs text-[#ffd700]">
-                        ⚠️ Auto mode will execute trades on your exchange. Ensure you understand the risks.
-                      </p>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -571,10 +549,10 @@ export default function OnboardPage() {
                 {loading ? (
                   <>
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Launching...
+                    Activating Bot...
                   </>
                 ) : (
-                  '🚀 Launch Dashboard'
+                  '🚀 Activate Bot & Go to Dashboard'
                 )}
               </button>
             </div>

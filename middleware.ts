@@ -12,8 +12,8 @@ const sessionOptions = {
   },
 }
 
-const PROTECTED_PATHS = ['/dashboard', '/trades', '/settings', '/congressional', '/deposit']
-const AUTH_PATHS = ['/onboard', '/login', '/register', '/claim']
+const PROTECTED_PATHS = ['/dashboard', '/trades', '/settings', '/congressional', '/deposit', '/onboard']
+const AUTH_PATHS = ['/login', '/register', '/claim']
 const PUBLIC_PATHS = [
   '/',
   '/api/auth/setup',

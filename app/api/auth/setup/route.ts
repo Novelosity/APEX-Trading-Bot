@@ -1,17 +1,15 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'crypto'
 import { encrypt } from '@/lib/crypto'
-import { updateUser } from '@/lib/storage'
-import { getSession, requireSession } from '@/lib/session'
+import { saveUser, updateUser } from '@/lib/storage'
+import { getSession } from '@/lib/session'
 import { ExchangeClient } from '@/lib/exchange'
 import type { User } from '@/lib/types'
 
 export async function POST(request: NextRequest) {
   try {
-    // Require existing session (account must exist before connecting exchange)
-    const session = await requireSession()
-
     const body = await request.json()
     const { exchange, apiKey, apiSecret, apiPassphrase, tradingMode, leverage } = body
 
@@ -30,9 +28,14 @@ export async function POST(request: NextRequest) {
     const apiSecretEnc = encrypt(apiSecret.trim())
     const apiPassphraseEnc = apiPassphrase ? encrypt(apiPassphrase.trim()) : undefined
 
+    // Get or create session
+    const session = await getSession()
+    const isNewUser = !session.isSetup || !session.userId
+    const userId = isNewUser ? randomUUID() : session.userId
+
     // Validate by fetching balance using a temp user object
     const tempUser: User = {
-      id: session.userId,
+      id: userId,
       exchange,
       apiKeyEnc,
       apiSecretEnc,
@@ -57,20 +60,34 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Update the existing user with exchange credentials
-    await updateUser(session.userId, {
-      exchange,
-      apiKeyEnc,
-      apiSecretEnc,
-      ...(apiPassphraseEnc ? { apiPassphraseEnc } : {}),
-      tradingMode: tradingMode || 'spot',
-      leverage: leverage || 1,
-    })
+    const now = new Date().toISOString()
+    if (isNewUser) {
+      // Auto-create account from API key — no email/password required
+      await saveUser({
+        ...tempUser,
+        paperMode: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+    } else {
+      // Update existing user's exchange credentials
+      await updateUser(userId, {
+        exchange,
+        apiKeyEnc,
+        apiSecretEnc,
+        ...(apiPassphraseEnc ? { apiPassphraseEnc } : {}),
+        tradingMode: tradingMode || 'spot',
+        leverage: leverage || 1,
+      })
+    }
 
-    // Update session exchange
-    const updatedSession = await getSession()
-    updatedSession.exchange = exchange
-    await updatedSession.save()
+    // Establish session
+    session.userId = userId
+    session.exchange = exchange
+    session.tradingMode = tradingMode || 'spot'
+    session.leverage = leverage || 1
+    session.isSetup = true
+    await session.save()
 
     return NextResponse.json({
       success: true,

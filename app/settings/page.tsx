@@ -401,10 +401,10 @@ export default function SettingsPage() {
                 <label className="text-sm font-medium text-[#e8e8f0]">Risk Per Trade</label>
                 <span className="text-sm font-mono font-bold text-[#4f8ef7]">{riskPct}%</span>
               </div>
-              <input type="range" min="0.1" max="1" step="0.1" value={riskPct} onChange={(e) => setRiskPct(Number(e.target.value))} />
+              <input type="range" min="0.1" max="5" step="0.1" value={riskPct} onChange={(e) => setRiskPct(Number(e.target.value))} />
               <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
                 <span>0.1% (Ultra-safe)</span>
-                <span>1% (Max — capital protection cap)</span>
+                <span>5% (Aggressive)</span>
               </div>
             </div>
 
@@ -427,26 +427,26 @@ export default function SettingsPage() {
                 <label className="text-sm font-medium text-[#e8e8f0]">Max Concurrent Positions</label>
                 <span className="text-sm font-mono font-bold text-[#4f8ef7]">{maxPositions}</span>
               </div>
-              <input type="range" min="1" max="3" step="1" value={maxPositions} onChange={(e) => setMaxPositions(Number(e.target.value))} />
+              <input type="range" min="1" max="10" step="1" value={maxPositions} onChange={(e) => setMaxPositions(Number(e.target.value))} />
               <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
                 <span>1 (Focused)</span>
-                <span>3 (Max — capital protection cap)</span>
+                <span>10 (Max)</span>
               </div>
             </div>
 
-            {/* Leverage (if futures) */}
-            {settings?.tradingMode === 'futures' && (
+            {/* Leverage (if futures or both) */}
+            {(settings?.tradingMode === 'futures' || settings?.tradingMode === 'both') && (
               <div>
                 <div className="flex justify-between mb-2">
                   <label className="text-sm font-medium text-[#e8e8f0]">Leverage</label>
                   <span className="text-sm font-mono font-bold text-[#ffd700]">{leverage}x</span>
                 </div>
-                <input type="range" min="1" max="3" step="1" value={leverage} onChange={(e) => setLeverage(Number(e.target.value))} />
+                <input type="range" min="1" max="20" step="1" value={leverage} onChange={(e) => setLeverage(Number(e.target.value))} />
                 <div className="flex justify-between text-xs text-[#6b6b80] mt-1">
                   <span>1x (Spot-like)</span>
-                  <span>3x (Max safe — never higher)</span>
+                  <span>20x (Max)</span>
                 </div>
-                <p className="text-xs text-[#6b6b80] mt-1.5">High leverage causes liquidations. APEX enforces 3x maximum.</p>
+                <p className="text-xs text-[#6b6b80] mt-1.5">High leverage increases liquidation risk. Use carefully.</p>
               </div>
             )}
           </div>

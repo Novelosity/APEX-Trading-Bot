@@ -3,9 +3,9 @@ export const preferredRegion = 'fra1'
 
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
-import { getAllUsers, getSignals, saveTrade, updateBotState, markSignalExecuted, getOpenTrades, getBotState } from '@/lib/storage'
-import { ExchangeClient } from '@/lib/exchange'
-import { calculatePositionSize, checkCanTrade } from '@/lib/risk'
+import { getAllUsers, getSignals, saveTrade, updateBotState, markSignalExecuted, getOpenTrades, getBotState, getDailyTradeCount, incrementDailyTradeCount, getLastLossAt } from '@/lib/storage'
+import { checkCanTrade } from '@/lib/risk'
+import { calculateTradeSpec } from '@/lib/position-sizing'
 import type { Trade } from '@/lib/types'
 
 const PAIRS_ATR_APPROX: Record<string, number> = {
@@ -23,6 +23,8 @@ const PAIRS_ATR_APPROX: Record<string, number> = {
   'ARB/USDT': 0.15,
   'OP/USDT': 0.4,
 }
+
+const PAPER_BALANCE = 10000
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get('authorization')
@@ -42,10 +44,10 @@ export async function GET(request: Request) {
     const results: Array<{ userId: string; pair: string; direction: string; success: boolean; error?: string }> = []
 
     for (const user of autoUsers) {
-      const client = new ExchangeClient(user)
       const openTrades = await getOpenTrades(user.id)
-      const balanceData = await client.fetchBalance()
-      const availableBalance = balanceData.free * (user.balancePct / 100)
+      const botState = await getBotState(user.id)
+      const tradesToday = await getDailyTradeCount(user.id)
+      const lastLossAt = await getLastLossAt(user.id) || undefined
 
       // Get pending HIGH and ULTRA_HIGH signals for this user or external
       const userSignals = await getSignals(user.id, 50)
@@ -55,29 +57,14 @@ export async function GET(request: Request) {
       )
 
       for (const signal of pendingSignals) {
-        const canCheck = await checkCanTrade(user.id, signal.pair, signal.direction, openTrades, user, availableBalance)
-        if (!canCheck.allowed) {
-          continue
-        }
-
         try {
-          const ticker = await client.fetchTicker(signal.pair)
-          const entry = ticker.last || signal.entry
-
+          const entry = signal.entry
           if (!entry || entry === 0) {
-            results.push({ userId: user.id, pair: signal.pair, direction: signal.direction, success: false, error: 'No price' })
+            results.push({ userId: user.id, pair: signal.pair, direction: signal.direction, success: false, error: 'No entry price' })
             continue
           }
 
           const atr = PAIRS_ATR_APPROX[signal.pair] || entry * 0.01
-          const botState = await getBotState(user.id)
-          const positionSize = calculatePositionSize(
-            availableBalance,
-            user.riskPct,
-            entry,
-            signal.direction === 'long' ? entry - atr * 1.5 : entry + atr * 1.5,
-            botState.consecutiveLosses
-          )
 
           let sl: number, tp1: number, tp2: number, tp3: number
           if (signal.direction === 'long') {
@@ -92,19 +79,103 @@ export async function GET(request: Request) {
             tp3 = entry - atr * 6.0
           }
 
-          const trade: Trade = {
-            id: randomUUID(),
-            userId: user.id,
-            pair: signal.pair,
+          // Paper trading mode
+          if (user.paperMode) {
+            const availableBalance = PAPER_BALANCE * (user.balancePct / 100)
+
+            const paperCanCheck = await checkCanTrade(user.id, signal.pair, signal.direction, openTrades, user, availableBalance, tradesToday, lastLossAt)
+            if (!paperCanCheck.allowed) {
+              continue
+            }
+
+            const spec = calculateTradeSpec({
+              balance: availableBalance,
+              user,
+              entry,
+              sl,
+              tp2,
+              direction: signal.direction,
+              pair: signal.pair,
+              score: signal.score || 85,
+              consecutiveLosses: botState.consecutiveLosses,
+            })
+
+            if (!spec.isValid) {
+              results.push({ userId: user.id, pair: signal.pair, direction: signal.direction, success: false, error: spec.invalidReason })
+              continue
+            }
+
+            const trade: Trade = {
+              id: randomUUID(),
+              userId: user.id,
+              pair: signal.pair,
+              direction: signal.direction,
+              entryPrice: entry,
+              positionSize: spec.positionSizeUsd,
+              slPrice: sl,
+              tp1Price: tp1,
+              tp2Price: tp2,
+              tp3Price: tp3,
+              status: 'open',
+              openedAt: new Date().toISOString(),
+              notes: '[PAPER]',
+            }
+
+            await saveTrade(trade)
+            await markSignalExecuted(signal.id, trade.id)
+            await updateBotState(user.id, {
+              totalTrades: botState.totalTrades + 1,
+              lastTradeAt: new Date().toISOString(),
+            })
+            await incrementDailyTradeCount(user.id)
+
+            executedCount++
+            results.push({ userId: user.id, pair: signal.pair, direction: signal.direction, success: true })
+            continue
+          }
+
+          // Live trading mode
+          const { ExchangeClient } = await import('@/lib/exchange')
+          const client = new ExchangeClient(user)
+          const balanceData = await client.fetchBalance()
+          const availableBalance = balanceData.free * (user.balancePct / 100)
+
+          // Re-check with actual balance
+          const liveCanCheck = await checkCanTrade(user.id, signal.pair, signal.direction, openTrades, user, availableBalance, tradesToday, lastLossAt)
+          if (!liveCanCheck.allowed) {
+            continue
+          }
+
+          const ticker = await client.fetchTicker(signal.pair)
+          const liveEntry = ticker.last || entry
+
+          if (!liveEntry || liveEntry === 0) {
+            results.push({ userId: user.id, pair: signal.pair, direction: signal.direction, success: false, error: 'No price' })
+            continue
+          }
+
+          // Slippage guard: skip if price moved > 0.5% since signal
+          const slippage = Math.abs(liveEntry - entry) / entry
+          if (slippage > 0.005) {
+            results.push({ userId: user.id, pair: signal.pair, direction: signal.direction, success: false, error: `Slippage too high: ${(slippage * 100).toFixed(2)}%` })
+            continue
+          }
+
+          const spec = calculateTradeSpec({
+            balance: availableBalance,
+            user,
+            entry: liveEntry,
+            sl,
+            tp2,
             direction: signal.direction,
-            entryPrice: entry,
-            positionSize,
-            slPrice: sl,
-            tp1Price: tp1,
-            tp2Price: tp2,
-            tp3Price: tp3,
-            status: 'open',
-            openedAt: new Date().toISOString(),
+            pair: signal.pair,
+            score: signal.score || 85,
+            consecutiveLosses: botState.consecutiveLosses,
+          })
+
+          if (!spec.isValid) {
+            results.push({ userId: user.id, pair: signal.pair, direction: signal.direction, success: false, error: spec.invalidReason })
+            continue
           }
 
           if (user.tradingMode === 'futures') {
@@ -112,11 +183,23 @@ export async function GET(request: Request) {
           }
 
           const side = signal.direction === 'long' ? 'buy' : 'sell'
-          const amountInBase = positionSize / entry
-          const order = await client.createMarketOrder(signal.pair, side, amountInBase)
+          const order = await client.createMarketOrder(signal.pair, side, spec.quantityBase)
 
-          trade.orderId = order.id
-          trade.entryPrice = order.price || entry
+          const trade: Trade = {
+            id: randomUUID(),
+            userId: user.id,
+            pair: signal.pair,
+            direction: signal.direction,
+            entryPrice: order.price || liveEntry,
+            positionSize: spec.positionSizeUsd,
+            slPrice: sl,
+            tp1Price: tp1,
+            tp2Price: tp2,
+            tp3Price: tp3,
+            status: 'open',
+            openedAt: new Date().toISOString(),
+            orderId: order.id,
+          }
 
           await saveTrade(trade)
           await markSignalExecuted(signal.id, trade.id)
@@ -124,6 +207,7 @@ export async function GET(request: Request) {
             totalTrades: botState.totalTrades + 1,
             lastTradeAt: new Date().toISOString(),
           })
+          await incrementDailyTradeCount(user.id)
 
           executedCount++
           results.push({ userId: user.id, pair: signal.pair, direction: signal.direction, success: true })

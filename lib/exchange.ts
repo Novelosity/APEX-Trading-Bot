@@ -29,7 +29,7 @@ export class ExchangeClient {
   private apiKey: string
   private apiSecret: string
   private apiPassphrase: string
-  private tradingMode: 'spot' | 'futures'
+  private tradingMode: 'spot' | 'futures' | 'both'
 
   constructor(user: User) {
     this.userId = user.id
@@ -66,8 +66,29 @@ export class ExchangeClient {
     if (this.tradingMode === 'futures') {
       config.options = { defaultType: 'future' }
     }
+    // 'both' defaults to spot for balance/candle fetching; futures leg handled separately in execution
 
     this.exchange = new ExchangeClass(config)
+
+    // Binance blocks US IPs — route through Fly.io proxy in Frankfurt
+    if (this.exchangeId === 'binance') {
+      const p = 'https://binance-proxy-apex.fly.dev'
+      const api = this.exchange.urls?.api
+      if (api && typeof api === 'object') {
+        // Spot / sapi endpoints → base proxy
+        for (const key of ['api', 'api1', 'api2', 'api3', 'api4', 'sapi', 'sapiV2', 'sapiV3', 'sapiV4', 'public', 'private']) {
+          if (typeof api[key] === 'string') api[key] = p
+        }
+        // Futures (fapi) endpoints → proxy /fapi path
+        for (const key of ['fapiPublic', 'fapiPrivate', 'fapiPublicV2', 'fapiPrivateV2']) {
+          if (typeof api[key] === 'string') api[key] = `${p}/fapi`
+        }
+        // Coin-M futures (dapi) → proxy /dapi path
+        for (const key of ['dapiPublic', 'dapiPrivate']) {
+          if (typeof api[key] === 'string') api[key] = `${p}/dapi`
+        }
+      }
+    }
 
     // KuCoin blocks US IPs — override URLs after instantiation to use CF Worker proxy
     // CF Smart Placement routes the Worker near KuCoin's servers (non-US exit IP)

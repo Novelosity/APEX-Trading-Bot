@@ -21,12 +21,12 @@ export const LoginSchema = z.object({
 
 export const SettingsPatchSchema = z.object({
   execMode: z.enum(['manual', 'auto', 'approval']).optional(),
-  tradingMode: z.enum(['spot', 'futures']).optional(),
+  tradingMode: z.enum(['spot', 'futures', 'both']).optional(),
   paperMode: z.boolean().optional(),
-  leverage: z.number().int().min(1).max(3).optional(), // Hard cap 3x for safety
+  leverage: z.number().int().min(1).max(20).optional(),
   balancePct: z.number().min(1).max(100).optional(),
-  riskPct: z.number().min(0.1).max(1).optional(), // Hard cap 1% risk per trade
-  maxPositions: z.number().int().min(1).max(3).optional(), // Hard cap 3 concurrent
+  riskPct: z.number().min(0.1).max(5).optional(),
+  maxPositions: z.number().int().min(1).max(10).optional(),
 }).strict()
 
 export const TradeSchema = z.object({

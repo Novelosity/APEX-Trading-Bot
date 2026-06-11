@@ -2,7 +2,7 @@ export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { requireSession } from '@/lib/session'
-import { getUser, updateUser } from '@/lib/storage'
+import { getUser, updateUser, saveUser } from '@/lib/storage'
 import { SettingsPatchSchema, parseBody } from '@/lib/validation'
 import { maskApiKey } from '@/lib/auth'
 import { decrypt } from '@/lib/crypto'
@@ -10,11 +10,30 @@ import { decrypt } from '@/lib/crypto'
 export async function GET() {
   try {
     const session = await requireSession()
-    const user = await getUser(session.userId)
+    let user = await getUser(session.userId)
 
-    if (!user) {
-      return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
-    }
+if (!user) {
+       if (session.exchange) {
+         user = {
+           id: session.userId,
+           exchange: session.exchange,
+           apiKeyEnc: '',
+           apiSecretEnc: '',
+           tradingMode: session.tradingMode || 'spot',
+           execMode: 'manual',
+           leverage: session.leverage || 1,
+           balancePct: 100,
+           riskPct: 1,
+           maxPositions: 5,
+           paperMode: true,
+           createdAt: new Date().toISOString(),
+           updatedAt: new Date().toISOString(),
+         }
+         await saveUser(user)
+       } else {
+         return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
+       }
+     }
 
     // Mask API key for display — never return decrypted values
     let maskedApiKey: string | undefined
@@ -63,14 +82,49 @@ export async function PATCH(request: NextRequest) {
     // If switching to auto+live, require explicit confirmation
     if (parsed.data.execMode === 'auto' && parsed.data.paperMode === false) {
       const user = await getUser(session.userId)
-      if (user?.paperMode !== false) {
+      if (user && user.paperMode !== false) {
         // They're transitioning from paper to live auto — allowed but noted
+        console.log(`User ${session.userId} transitioning from paper to live auto mode`)
       }
     }
 
-    const updated = await updateUser(session.userId, parsed.data)
+    let updated = await updateUser(session.userId, parsed.data)
     if (!updated) {
-      return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
+      if (session.exchange) {
+        // Create user from session data with submitted settings
+        await saveUser({
+          id: session.userId,
+          exchange: session.exchange,
+          apiKeyEnc: '',
+          apiSecretEnc: '',
+          tradingMode: session.tradingMode || 'spot',
+          execMode: parsed.data.execMode ?? 'manual',
+          leverage: session.leverage || 1,
+          balancePct: parsed.data.balancePct ?? 100,
+          riskPct: parsed.data.riskPct ?? 1,
+          maxPositions: parsed.data.maxPositions ?? 5,
+          paperMode: parsed.data.paperMode ?? true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        updated = {
+          id: session.userId,
+          exchange: session.exchange,
+          apiKeyEnc: '',
+          apiSecretEnc: '',
+          tradingMode: session.tradingMode || 'spot',
+          execMode: parsed.data.execMode ?? 'manual',
+          leverage: session.leverage || 1,
+          balancePct: parsed.data.balancePct ?? 100,
+          riskPct: parsed.data.riskPct ?? 1,
+          maxPositions: parsed.data.maxPositions ?? 5,
+          paperMode: parsed.data.paperMode ?? true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+      } else {
+        return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
+      }
     }
 
     return NextResponse.json({

@@ -6,7 +6,7 @@ import { getIronSession } from 'iron-session'
 import { cookies } from 'next/headers'
 import type { SessionData } from '@/lib/types'
 import {
-  getUser, getSignal, markSignalExecuted, saveTrade,
+  getUser, getSignal, markSignalExecuted, saveTrade, saveUser,
   updateBotState, getBotState, getOpenTrades, getTrades,
   getPendingApprovals, removePendingApproval,
   getDailyTradeCount, incrementDailyTradeCount, getLastLossAt,
@@ -98,9 +98,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true, message: 'Signal rejected' })
   }
 
-  // ── APPROVE: execute the trade ────────────────────────────────────────────
-  const user = await getUser(userId)
-  if (!user) return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
+// ── APPROVE: execute the trade ────────────────────────────────────────────
+   let user = await getUser(userId)
+   if (!user) {
+     const sessionData = session!
+     if (sessionData.isSetup && sessionData.exchange) {
+       user = {
+         id: userId,
+         exchange: sessionData.exchange,
+         apiKeyEnc: '',
+         apiSecretEnc: '',
+         tradingMode: sessionData.tradingMode || 'spot',
+         execMode: 'manual',
+         leverage: sessionData.leverage || 1,
+         balancePct: 100,
+         riskPct: 1,
+         maxPositions: 5,
+         paperMode: true,
+         createdAt: new Date().toISOString(),
+         updatedAt: new Date().toISOString(),
+       }
+       await saveUser(user)
+     } else {
+       return NextResponse.json({ success: false, error: 'User not found - please run setup on deployed site' }, { status: 404 })
+     }
+   }
 
   const openTrades = await getOpenTrades(userId)
   const tradesToday = await getDailyTradeCount(userId)
