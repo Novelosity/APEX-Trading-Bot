@@ -19,7 +19,7 @@ const _PROVIDERS: SignalProvider[] = [
 
 export async function analyzeFundingRates(symbol: string): Promise<{ longBias: number; confidence: number } | null> {
   try {
-    const response = await fetch(`https://api.binance.com/fapi/v1/fundingRate?symbol=${symbol.replace('/', '')}&limit=100`, { next: { revalidate: 60 } })
+    const response = await fetch(`https://binance-proxy-apex.fly.dev/fapi/v1/fundingRate?symbol=${symbol.replace('/', '')}&limit=100`, { next: { revalidate: 60 } })
     if (!response.ok) return null
     
     const rates = await response.json() as Array<{ fundingTime: number; fundingRate: string }>
@@ -84,7 +84,7 @@ export async function analyzeLiquidationZones(symbol: string): Promise<{ longZon
 
 export async function analyzeOpenInterest(symbol: string): Promise<{ bullish: boolean; confidence: number } | null> {
   try {
-    const response = await fetch(`https://api.binance.com/fapi/v1/openInterest?symbol=${symbol.replace('/', '')}`, { next: { revalidate: 300 } })
+    const response = await fetch(`https://binance-proxy-apex.fly.dev/fapi/v1/openInterest?symbol=${symbol.replace('/', '')}`, { next: { revalidate: 300 } })
     if (!response.ok) return null
     
     const data = await response.json() as { openInterest: string; time: number }

@@ -14,7 +14,7 @@ export async function GET() {
         {
           id: 'binance_funding',
           name: 'Binance Funding Rates',
-          url: 'https://api.binance.com/fapi/v1/fundingRate',
+          url: 'https://binance-proxy-apex.fly.dev/fapi/v1/fundingRate',
           type: 'funding_rate',
           enabled: true,
           priority: 1,
@@ -32,7 +32,7 @@ export async function GET() {
         {
           id: 'open_interest',
           name: 'Open Interest',
-          url: 'https://api.binance.com/fapi/v1/openInterest',
+          url: 'https://binance-proxy-apex.fly.dev/fapi/v1/openInterest',
           type: 'open_interest',
           enabled: true,
           priority: 3,
