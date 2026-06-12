@@ -1,3 +1,8 @@
 {
-  "apphosting": {}
+  "apphosting": [
+    {
+      "backendId": "apex-trading-bot",
+      "rootDir": "/"
+    }
+  ]
 }
