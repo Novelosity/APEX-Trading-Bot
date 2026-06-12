@@ -1,4 +1,3 @@
-import { FieldValue } from 'firebase-admin/firestore'
 import { getDb } from './firebase'
 import type {
   User, Trade, Signal, BotState,
@@ -9,72 +8,85 @@ import type {
 // ─── Users ────────────────────────────────────────────────────────────────────
 
 export async function saveUser(user: User): Promise<void> {
-  await getDb().collection('users').doc(user.id).set(user)
+  await getDb().ref(`users/${user.id}`).set(user)
 }
 
 export async function getUser(userId: string): Promise<User | null> {
-  const doc = await getDb().collection('users').doc(userId).get()
-  return doc.exists ? (doc.data() as User) : null
+  const snap = await getDb().ref(`users/${userId}`).get()
+  return snap.exists() ? (snap.val() as User) : null
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  const snapshot = await getDb().collection('users').get()
-  return snapshot.docs.map((d) => d.data() as User)
+  const snap = await getDb().ref('users').get()
+  if (!snap.exists()) return []
+  return Object.values(snap.val()) as User[]
 }
 
 export async function updateUser(userId: string, update: Partial<User>): Promise<User | null> {
-  const ref = getDb().collection('users').doc(userId)
-  const doc = await ref.get()
-  if (!doc.exists) return null
-  const updated = { ...doc.data() as User, ...update, updatedAt: new Date().toISOString() }
+  const ref = getDb().ref(`users/${userId}`)
+  const snap = await ref.get()
+  if (!snap.exists()) return null
+  const updated = { ...snap.val() as User, ...update, updatedAt: new Date().toISOString() }
   await ref.set(updated)
   return updated
 }
 
 export async function getUserByEmail(email: string): Promise<User | null> {
-  const snapshot = await getDb().collection('users')
-    .where('email', '==', email.toLowerCase())
-    .limit(1)
-    .get()
-  return snapshot.empty ? null : (snapshot.docs[0].data() as User)
+  const snap = await getDb().ref('users').get()
+  if (!snap.exists()) return null
+  const users = Object.values(snap.val()) as User[]
+  return users.find((u) => u.email?.toLowerCase() === email.toLowerCase()) ?? null
 }
 
 // ─── Trades ───────────────────────────────────────────────────────────────────
 
 export async function saveTrade(trade: Trade): Promise<void> {
-  await getDb().collection('trades').doc(trade.id).set(trade)
+  await getDb().ref(`trades/${trade.id}`).set(trade)
+  if (trade.status === 'open') {
+    await getDb().ref(`open_trades/${trade.userId}/${trade.id}`).set(true)
+  }
 }
 
-export async function updateTrade(id: string, _userId: string, update: Partial<Trade>): Promise<Trade | null> {
-  const ref = getDb().collection('trades').doc(id)
-  const doc = await ref.get()
-  if (!doc.exists) return null
-  const updated = { ...doc.data() as Trade, ...update }
+export async function updateTrade(id: string, userId: string, update: Partial<Trade>): Promise<Trade | null> {
+  const ref = getDb().ref(`trades/${id}`)
+  const snap = await ref.get()
+  if (!snap.exists()) return null
+  const updated = { ...snap.val() as Trade, ...update }
   await ref.set(updated)
+  if (update.status && update.status !== 'open') {
+    await getDb().ref(`open_trades/${userId}/${id}`).remove()
+  }
   return updated
 }
 
 export async function getTrade(id: string): Promise<Trade | null> {
-  const doc = await getDb().collection('trades').doc(id).get()
-  return doc.exists ? (doc.data() as Trade) : null
+  const snap = await getDb().ref(`trades/${id}`).get()
+  return snap.exists() ? (snap.val() as Trade) : null
 }
 
 export async function getOpenTrades(userId: string): Promise<Trade[]> {
-  const snapshot = await getDb().collection('trades').where('userId', '==', userId).get()
-  return snapshot.docs
-    .map((d) => d.data() as Trade)
-    .filter((t) => t.status === 'open')
+  const snap = await getDb().ref(`open_trades/${userId}`).get()
+  if (!snap.exists()) return []
+  const ids = Object.keys(snap.val())
+  const trades = await Promise.all(ids.map((id) => getTrade(id)))
+  return (trades.filter(Boolean) as Trade[]).filter((t) => t.status === 'open')
 }
 
 export async function getAllOpenTrades(): Promise<Trade[]> {
-  const snapshot = await getDb().collection('trades').where('status', '==', 'open').get()
-  return snapshot.docs.map((d) => d.data() as Trade)
+  const snap = await getDb().ref('open_trades').get()
+  if (!snap.exists()) return []
+  const allIds: string[] = []
+  snap.forEach((userSnap) => {
+    userSnap.forEach((tradeSnap) => { allIds.push(tradeSnap.key!) })
+  })
+  const trades = await Promise.all(allIds.map((id) => getTrade(id)))
+  return (trades.filter(Boolean) as Trade[]).filter((t) => t.status === 'open')
 }
 
 export async function getTrades(userId: string, limit = 50): Promise<Trade[]> {
-  const snapshot = await getDb().collection('trades').where('userId', '==', userId).get()
-  return snapshot.docs
-    .map((d) => d.data() as Trade)
+  const snap = await getDb().ref('trades').orderByChild('userId').equalTo(userId).get()
+  if (!snap.exists()) return []
+  return (Object.values(snap.val()) as Trade[])
     .sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
     .slice(0, limit)
 }
@@ -82,27 +94,24 @@ export async function getTrades(userId: string, limit = 50): Promise<Trade[]> {
 // ─── Signals ──────────────────────────────────────────────────────────────────
 
 export async function saveSignal(signal: Signal): Promise<void> {
-  await getDb().collection('signals').doc(signal.id).set(signal)
+  await getDb().ref(`signals/${signal.id}`).set(signal)
 }
 
 export async function getSignal(id: string): Promise<Signal | null> {
-  const doc = await getDb().collection('signals').doc(id).get()
-  return doc.exists ? (doc.data() as Signal) : null
+  const snap = await getDb().ref(`signals/${id}`).get()
+  return snap.exists() ? (snap.val() as Signal) : null
 }
 
 export async function getSignals(userId: string, limit = 20): Promise<Signal[]> {
-  const snapshot = await getDb().collection('signals').where('userId', '==', userId).get()
-  return snapshot.docs
-    .map((d) => d.data() as Signal)
+  const snap = await getDb().ref('signals').orderByChild('userId').equalTo(userId).get()
+  if (!snap.exists()) return []
+  return (Object.values(snap.val()) as Signal[])
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, limit)
 }
 
 export async function markSignalExecuted(id: string, tradeId: string): Promise<void> {
-  await getDb().collection('signals').doc(id).update({
-    executed: true,
-    executedTradeId: tradeId,
-  })
+  await getDb().ref(`signals/${id}`).update({ executed: true, executedTradeId: tradeId })
 }
 
 // ─── Bot State ────────────────────────────────────────────────────────────────
@@ -119,14 +128,14 @@ const defaultBotState = (userId: string): BotState => ({
 })
 
 export async function getBotState(userId: string): Promise<BotState> {
-  const doc = await getDb().collection('botstate').doc(userId).get()
-  return doc.exists ? (doc.data() as BotState) : defaultBotState(userId)
+  const snap = await getDb().ref(`botstate/${userId}`).get()
+  return snap.exists() ? (snap.val() as BotState) : defaultBotState(userId)
 }
 
 export async function updateBotState(userId: string, update: Partial<BotState>): Promise<BotState> {
   const current = await getBotState(userId)
   const updated = { ...current, ...update }
-  await getDb().collection('botstate').doc(userId).set(updated)
+  await getDb().ref(`botstate/${userId}`).set(updated)
   return updated
 }
 
@@ -134,44 +143,35 @@ export async function updateBotState(userId: string, update: Partial<BotState>):
 
 export async function getDailyTradeCount(userId: string): Promise<number> {
   const today = new Date().toISOString().slice(0, 10)
-  const doc = await getDb().collection('dailytrades').doc(`${userId}_${today}`).get()
-  return doc.exists ? ((doc.data()?.count as number) || 0) : 0
+  const snap = await getDb().ref(`dailytrades/${userId}_${today}`).get()
+  return snap.exists() ? (snap.val() as number) : 0
 }
 
 export async function incrementDailyTradeCount(userId: string): Promise<void> {
   const today = new Date().toISOString().slice(0, 10)
-  await getDb().collection('dailytrades').doc(`${userId}_${today}`).set(
-    { count: FieldValue.increment(1) },
-    { merge: true }
-  )
+  await getDb().ref(`dailytrades/${userId}_${today}`).transaction((cur) => (cur || 0) + 1)
 }
 
 export async function getLastLossAt(userId: string): Promise<string | null> {
-  const doc = await getDb().collection('lastloss').doc(userId).get()
-  return doc.exists ? ((doc.data()?.value as string) || null) : null
+  const snap = await getDb().ref(`lastloss/${userId}`).get()
+  return snap.exists() ? (snap.val() as string) : null
 }
 
 export async function setLastLossAt(userId: string, iso: string): Promise<void> {
-  await getDb().collection('lastloss').doc(userId).set({ value: iso })
+  await getDb().ref(`lastloss/${userId}`).set(iso)
 }
 
 export async function savePendingApproval(userId: string, signalId: string): Promise<void> {
-  await getDb().collection('pending_approvals').doc(userId).set(
-    { signalIds: FieldValue.arrayUnion(signalId) },
-    { merge: true }
-  )
+  await getDb().ref(`pending_approvals/${userId}/${signalId}`).set(true)
 }
 
 export async function getPendingApprovals(userId: string): Promise<string[]> {
-  const doc = await getDb().collection('pending_approvals').doc(userId).get()
-  return doc.exists ? ((doc.data()?.signalIds as string[]) || []) : []
+  const snap = await getDb().ref(`pending_approvals/${userId}`).get()
+  return snap.exists() ? Object.keys(snap.val()) : []
 }
 
 export async function removePendingApproval(userId: string, signalId: string): Promise<void> {
-  await getDb().collection('pending_approvals').doc(userId).set(
-    { signalIds: FieldValue.arrayRemove(signalId) },
-    { merge: true }
-  )
+  await getDb().ref(`pending_approvals/${userId}/${signalId}`).remove()
 }
 
 // ─── Congressional Module ─────────────────────────────────────────────────────
@@ -191,60 +191,64 @@ const defaultCongressConfig = (userId: string): CongressionalModuleConfig => ({
 })
 
 export async function getCongressConfig(userId: string): Promise<CongressionalModuleConfig> {
-  const doc = await getDb().collection('congress_config').doc(userId).get()
-  return doc.exists ? (doc.data() as CongressionalModuleConfig) : defaultCongressConfig(userId)
+  const snap = await getDb().ref(`congress_config/${userId}`).get()
+  return snap.exists() ? (snap.val() as CongressionalModuleConfig) : defaultCongressConfig(userId)
 }
 
 export async function saveCongressConfig(config: CongressionalModuleConfig): Promise<void> {
-  await getDb().collection('congress_config').doc(config.userId).set(config)
+  await getDb().ref(`congress_config/${config.userId}`).set(config)
 }
 
 export async function saveDisclosure(disclosure: CongressionalDisclosure): Promise<void> {
-  await getDb().collection('disclosures').doc(disclosure.id).set(disclosure)
+  await getDb().ref(`disclosures/${disclosure.id}`).set(disclosure)
 }
 
 export async function getDisclosure(id: string): Promise<CongressionalDisclosure | null> {
-  const doc = await getDb().collection('disclosures').doc(id).get()
-  return doc.exists ? (doc.data() as CongressionalDisclosure) : null
+  const snap = await getDb().ref(`disclosures/${id}`).get()
+  return snap.exists() ? (snap.val() as CongressionalDisclosure) : null
 }
 
 export async function getRecentDisclosures(limit = 50): Promise<CongressionalDisclosure[]> {
-  const snapshot = await getDb().collection('disclosures').get()
-  return snapshot.docs
-    .map((d) => d.data() as CongressionalDisclosure)
+  const snap = await getDb().ref('disclosures').get()
+  if (!snap.exists()) return []
+  return (Object.values(snap.val()) as CongressionalDisclosure[])
     .sort((a, b) => new Date(b.fetchedAt).getTime() - new Date(a.fetchedAt).getTime())
     .slice(0, limit)
 }
 
 export async function saveMirrorPosition(pos: MirrorPosition): Promise<void> {
-  await getDb().collection('mirror_positions').doc(pos.id).set(pos)
+  await getDb().ref(`mirror_positions/${pos.id}`).set(pos)
+  if (pos.status === 'open') {
+    await getDb().ref(`open_mirrors/${pos.userId}/${pos.id}`).set(true)
+  }
 }
 
 export async function getMirrorPosition(id: string): Promise<MirrorPosition | null> {
-  const doc = await getDb().collection('mirror_positions').doc(id).get()
-  return doc.exists ? (doc.data() as MirrorPosition) : null
+  const snap = await getDb().ref(`mirror_positions/${id}`).get()
+  return snap.exists() ? (snap.val() as MirrorPosition) : null
 }
 
 export async function updateMirrorPosition(id: string, update: Partial<MirrorPosition>): Promise<MirrorPosition | null> {
-  const ref = getDb().collection('mirror_positions').doc(id)
-  const doc = await ref.get()
-  if (!doc.exists) return null
-  const updated = { ...doc.data() as MirrorPosition, ...update }
+  const ref = getDb().ref(`mirror_positions/${id}`)
+  const snap = await ref.get()
+  if (!snap.exists()) return null
+  const updated = { ...snap.val() as MirrorPosition, ...update }
   await ref.set(updated)
   return updated
 }
 
 export async function getOpenMirrorPositions(userId: string): Promise<MirrorPosition[]> {
-  const snapshot = await getDb().collection('mirror_positions').where('userId', '==', userId).get()
-  return snapshot.docs
-    .map((d) => d.data() as MirrorPosition)
-    .filter((p) => p.status === 'open')
+  const snap = await getDb().ref(`open_mirrors/${userId}`).get()
+  if (!snap.exists()) return []
+  const ids = Object.keys(snap.val())
+  const positions = await Promise.all(ids.map((id) => getMirrorPosition(id)))
+  return (positions.filter(Boolean) as MirrorPosition[]).filter((p) => p.status === 'open')
 }
 
 export async function getAllMirrorPositions(userId: string, limit = 50): Promise<MirrorPosition[]> {
-  const snapshot = await getDb().collection('mirror_positions').where('userId', '==', userId).get()
-  return snapshot.docs
-    .map((d) => d.data() as MirrorPosition)
+  const snap = await getDb().ref('mirror_positions').orderByChild('userId').equalTo(userId).get()
+  if (!snap.exists()) return []
+  return (Object.values(snap.val()) as MirrorPosition[])
     .sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
     .slice(0, limit)
 }
@@ -252,24 +256,26 @@ export async function getAllMirrorPositions(userId: string, limit = 50): Promise
 // ─── Signal Sources ───────────────────────────────────────────────────────────
 
 export async function saveSignalSource(source: SignalSource): Promise<void> {
-  await getDb().collection('signal_sources').doc(source.id).set(source)
+  await getDb().ref(`signal_sources/${source.id}`).set(source)
 }
 
 export async function getSignalSource(id: string): Promise<SignalSource | null> {
-  const doc = await getDb().collection('signal_sources').doc(id).get()
-  return doc.exists ? (doc.data() as SignalSource) : null
+  const snap = await getDb().ref(`signal_sources/${id}`).get()
+  return snap.exists() ? (snap.val() as SignalSource) : null
 }
 
 export async function getActiveSignalSources(): Promise<SignalSource[]> {
-  const snapshot = await getDb().collection('signal_sources').where('enabled', '==', true).get()
-  return snapshot.docs.map((d) => d.data() as SignalSource)
+  const snap = await getDb().ref('signal_sources').get()
+  if (!snap.exists()) return []
+  return (Object.values(snap.val()) as SignalSource[]).filter((s) => s.enabled)
 }
 
 export async function getAllSignalSources(): Promise<SignalSource[]> {
-  const snapshot = await getDb().collection('signal_sources').get()
-  return snapshot.docs.map((d) => d.data() as SignalSource)
+  const snap = await getDb().ref('signal_sources').get()
+  if (!snap.exists()) return []
+  return Object.values(snap.val()) as SignalSource[]
 }
 
 export async function saveExternalSignal(signal: ExternalSignal): Promise<void> {
-  await getDb().collection('external_signals').doc(signal.id).set(signal)
+  await getDb().ref(`external_signals/${signal.id}`).set(signal)
 }
