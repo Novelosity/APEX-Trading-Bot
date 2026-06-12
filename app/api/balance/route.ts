@@ -34,8 +34,8 @@ export async function GET() {
       }
     }
 
-    // Paper mode — return virtual balance (no exchange call needed)
-    if (user.paperMode) {
+    // If no API key configured, fall back to virtual paper balance
+    if (!user.apiKeyEnc) {
       const PAPER_BALANCE = 10000
       const total = PAPER_BALANCE * (user.balancePct / 100)
       return NextResponse.json({
