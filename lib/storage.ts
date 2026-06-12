@@ -1,222 +1,108 @@
-import type { User, Trade, Signal, BotState, CongressionalDisclosure, MirrorPosition, CongressionalModuleConfig, SignalSource, ExternalSignal } from './types'
-
-// In-memory fallback for local dev when KV is not available
-const memStore = new Map<string, string>()
-
-async function kvGet(key: string): Promise<string | null> {
-  try {
-    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-      const { kv } = await import('@vercel/kv')
-      const val = await kv.get<string>(key)
-      return val ?? null
-    }
-  } catch {
-    // fall through to memStore
-  }
-  return memStore.get(key) ?? null
-}
-
-async function kvSet(key: string, value: string): Promise<void> {
-  try {
-    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-      const { kv } = await import('@vercel/kv')
-      await kv.set(key, value)
-      return
-    }
-  } catch {
-    // fall through to memStore
-  }
-  memStore.set(key, value)
-}
-
-async function kvSadd(key: string, member: string): Promise<void> {
-  try {
-    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-      const { kv } = await import('@vercel/kv')
-      await kv.sadd(key, member)
-      return
-    }
-  } catch {
-    // fall through to memStore set simulation
-  }
-  const existing = memStore.get(key)
-  const set: string[] = existing ? JSON.parse(existing) : []
-  if (!set.includes(member)) {
-    set.push(member)
-  }
-  memStore.set(key, JSON.stringify(set))
-}
-
-async function kvSmembers(key: string): Promise<string[]> {
-  try {
-    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-      const { kv } = await import('@vercel/kv')
-      const members = await kv.smembers(key)
-      return members ?? []
-    }
-  } catch {
-    // fall through
-  }
-  const existing = memStore.get(key)
-  return existing ? JSON.parse(existing) : []
-}
-
-async function kvSrem(key: string, member: string): Promise<void> {
-  try {
-    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-      const { kv } = await import('@vercel/kv')
-      await kv.srem(key, member)
-      return
-    }
-  } catch {
-    // fall through
-  }
-  const existing = memStore.get(key)
-  if (existing) {
-    const set: string[] = JSON.parse(existing)
-    memStore.set(key, JSON.stringify(set.filter((m) => m !== member)))
-  }
-}
-
-async function kvLpush(key: string, value: string): Promise<void> {
-  try {
-    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-      const { kv } = await import('@vercel/kv')
-      await kv.lpush(key, value)
-      return
-    }
-  } catch {
-    // fall through
-  }
-  const existing = memStore.get(key)
-  const list: string[] = existing ? JSON.parse(existing) : []
-  list.unshift(value)
-  memStore.set(key, JSON.stringify(list))
-}
-
-async function kvLrange(key: string, start: number, end: number): Promise<string[]> {
-  try {
-    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-      const { kv } = await import('@vercel/kv')
-      const items = await kv.lrange<string>(key, start, end)
-      return items ?? []
-    }
-  } catch {
-    // fall through
-  }
-  const existing = memStore.get(key)
-  if (!existing) return []
-  const list: string[] = JSON.parse(existing)
-  const actualEnd = end === -1 ? list.length : end + 1
-  return list.slice(start, actualEnd)
-}
+import { FieldValue } from 'firebase-admin/firestore'
+import { getDb } from './firebase'
+import type {
+  User, Trade, Signal, BotState,
+  CongressionalDisclosure, MirrorPosition,
+  CongressionalModuleConfig, SignalSource, ExternalSignal,
+} from './types'
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 
 export async function saveUser(user: User): Promise<void> {
-  await kvSet(`user:${user.id}`, JSON.stringify(user))
-  await kvSadd('users', user.id)
+  await getDb().collection('users').doc(user.id).set(user)
 }
 
 export async function getUser(userId: string): Promise<User | null> {
-  const data = await kvGet(`user:${userId}`)
-  return data ? JSON.parse(data) : null
+  const doc = await getDb().collection('users').doc(userId).get()
+  return doc.exists ? (doc.data() as User) : null
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  const ids = await kvSmembers('users')
-  const users = await Promise.all(ids.map((id) => getUser(id)))
-  return users.filter(Boolean) as User[]
+  const snapshot = await getDb().collection('users').get()
+  return snapshot.docs.map((d) => d.data() as User)
 }
 
 export async function updateUser(userId: string, update: Partial<User>): Promise<User | null> {
-  const user = await getUser(userId)
-  if (!user) return null
-  const updated = { ...user, ...update, updatedAt: new Date().toISOString() }
-  await saveUser(updated)
+  const ref = getDb().collection('users').doc(userId)
+  const doc = await ref.get()
+  if (!doc.exists) return null
+  const updated = { ...doc.data() as User, ...update, updatedAt: new Date().toISOString() }
+  await ref.set(updated)
   return updated
 }
 
 export async function getUserByEmail(email: string): Promise<User | null> {
-  const ids = await kvSmembers('users')
-  for (const id of ids) {
-    const user = await getUser(id)
-    if (user?.email?.toLowerCase() === email.toLowerCase()) return user
-  }
-  return null
+  const snapshot = await getDb().collection('users')
+    .where('email', '==', email.toLowerCase())
+    .limit(1)
+    .get()
+  return snapshot.empty ? null : (snapshot.docs[0].data() as User)
 }
 
 // ─── Trades ───────────────────────────────────────────────────────────────────
 
 export async function saveTrade(trade: Trade): Promise<void> {
-  await kvSet(`trade:${trade.id}`, JSON.stringify(trade))
-  await kvLpush(`trades:${trade.userId}`, trade.id)
-  if (trade.status === 'open') {
-    await kvSadd(`open_trades:${trade.userId}`, trade.id)
-  }
-  await kvSadd('all_open_trades', `${trade.userId}:${trade.id}`)
+  await getDb().collection('trades').doc(trade.id).set(trade)
 }
 
-export async function updateTrade(id: string, userId: string, update: Partial<Trade>): Promise<Trade | null> {
-  const data = await kvGet(`trade:${id}`)
-  if (!data) return null
-  const trade: Trade = JSON.parse(data)
-  const updated = { ...trade, ...update }
-  await kvSet(`trade:${id}`, JSON.stringify(updated))
-
-  // If closed, we don't need to track in open sets (they'll just not be found)
+export async function updateTrade(id: string, _userId: string, update: Partial<Trade>): Promise<Trade | null> {
+  const ref = getDb().collection('trades').doc(id)
+  const doc = await ref.get()
+  if (!doc.exists) return null
+  const updated = { ...doc.data() as Trade, ...update }
+  await ref.set(updated)
   return updated
 }
 
 export async function getTrade(id: string): Promise<Trade | null> {
-  const data = await kvGet(`trade:${id}`)
-  return data ? JSON.parse(data) : null
+  const doc = await getDb().collection('trades').doc(id).get()
+  return doc.exists ? (doc.data() as Trade) : null
 }
 
 export async function getOpenTrades(userId: string): Promise<Trade[]> {
-  const ids = await kvSmembers(`open_trades:${userId}`)
-  const trades = await Promise.all(ids.map((id) => getTrade(id)))
-  return (trades.filter(Boolean) as Trade[]).filter((t) => t.status === 'open')
+  const snapshot = await getDb().collection('trades').where('userId', '==', userId).get()
+  return snapshot.docs
+    .map((d) => d.data() as Trade)
+    .filter((t) => t.status === 'open')
 }
 
 export async function getAllOpenTrades(): Promise<Trade[]> {
-  const entries = await kvSmembers('all_open_trades')
-  const tradeIds = entries.map((e) => e.split(':')[1]).filter(Boolean)
-  const trades = await Promise.all(tradeIds.map((id) => getTrade(id)))
-  return (trades.filter(Boolean) as Trade[]).filter((t) => t.status === 'open')
+  const snapshot = await getDb().collection('trades').where('status', '==', 'open').get()
+  return snapshot.docs.map((d) => d.data() as Trade)
 }
 
 export async function getTrades(userId: string, limit = 50): Promise<Trade[]> {
-  const ids = await kvLrange(`trades:${userId}`, 0, limit - 1)
-  const trades = await Promise.all(ids.map((id) => getTrade(id)))
-  return trades.filter(Boolean) as Trade[]
+  const snapshot = await getDb().collection('trades').where('userId', '==', userId).get()
+  return snapshot.docs
+    .map((d) => d.data() as Trade)
+    .sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
+    .slice(0, limit)
 }
 
 // ─── Signals ──────────────────────────────────────────────────────────────────
 
 export async function saveSignal(signal: Signal): Promise<void> {
-  await kvSet(`signal:${signal.id}`, JSON.stringify(signal))
-  await kvLpush(`signals:${signal.userId}`, signal.id)
+  await getDb().collection('signals').doc(signal.id).set(signal)
 }
 
 export async function getSignal(id: string): Promise<Signal | null> {
-  const data = await kvGet(`signal:${id}`)
-  return data ? JSON.parse(data) : null
+  const doc = await getDb().collection('signals').doc(id).get()
+  return doc.exists ? (doc.data() as Signal) : null
 }
 
 export async function getSignals(userId: string, limit = 20): Promise<Signal[]> {
-  const ids = await kvLrange(`signals:${userId}`, 0, limit - 1)
-  const signals = await Promise.all(ids.map((id) => getSignal(id)))
-  return signals.filter(Boolean) as Signal[]
+  const snapshot = await getDb().collection('signals').where('userId', '==', userId).get()
+  return snapshot.docs
+    .map((d) => d.data() as Signal)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, limit)
 }
 
 export async function markSignalExecuted(id: string, tradeId: string): Promise<void> {
-  const data = await kvGet(`signal:${id}`)
-  if (!data) return
-  const signal: Signal = JSON.parse(data)
-  signal.executed = true
-  signal.executedTradeId = tradeId
-  await kvSet(`signal:${id}`, JSON.stringify(signal))
+  await getDb().collection('signals').doc(id).update({
+    executed: true,
+    executedTradeId: tradeId,
+  })
 }
 
 // ─── Bot State ────────────────────────────────────────────────────────────────
@@ -233,57 +119,59 @@ const defaultBotState = (userId: string): BotState => ({
 })
 
 export async function getBotState(userId: string): Promise<BotState> {
-  const data = await kvGet(`botstate:${userId}`)
-  return data ? JSON.parse(data) : defaultBotState(userId)
+  const doc = await getDb().collection('botstate').doc(userId).get()
+  return doc.exists ? (doc.data() as BotState) : defaultBotState(userId)
 }
 
 export async function updateBotState(userId: string, update: Partial<BotState>): Promise<BotState> {
   const current = await getBotState(userId)
   const updated = { ...current, ...update }
-  await kvSet(`botstate:${userId}`, JSON.stringify(updated))
+  await getDb().collection('botstate').doc(userId).set(updated)
   return updated
 }
 
 // ─── Risk Tracking Helpers ────────────────────────────────────────────────────
 
-/** Get number of trades placed today (UTC date) */
 export async function getDailyTradeCount(userId: string): Promise<number> {
   const today = new Date().toISOString().slice(0, 10)
-  const val = await kvGet(`daytrades:${userId}:${today}`)
-  return val ? parseInt(val, 10) : 0
+  const doc = await getDb().collection('dailytrades').doc(`${userId}_${today}`).get()
+  return doc.exists ? ((doc.data()?.count as number) || 0) : 0
 }
 
-/** Increment today's trade count */
 export async function incrementDailyTradeCount(userId: string): Promise<void> {
   const today = new Date().toISOString().slice(0, 10)
-  const key = `daytrades:${userId}:${today}`
-  const val = await kvGet(key)
-  await kvSet(key, String((val ? parseInt(val, 10) : 0) + 1))
+  await getDb().collection('dailytrades').doc(`${userId}_${today}`).set(
+    { count: FieldValue.increment(1) },
+    { merge: true }
+  )
 }
 
-/** Get timestamp of the last loss for cooldown check */
 export async function getLastLossAt(userId: string): Promise<string | null> {
-  return kvGet(`lastloss:${userId}`)
+  const doc = await getDb().collection('lastloss').doc(userId).get()
+  return doc.exists ? ((doc.data()?.value as string) || null) : null
 }
 
-/** Set timestamp of the last loss */
 export async function setLastLossAt(userId: string, iso: string): Promise<void> {
-  await kvSet(`lastloss:${userId}`, iso)
+  await getDb().collection('lastloss').doc(userId).set({ value: iso })
 }
 
-/** Save a signal ID to the pending approval queue */
 export async function savePendingApproval(userId: string, signalId: string): Promise<void> {
-  await kvSadd(`pending_approvals:${userId}`, signalId)
+  await getDb().collection('pending_approvals').doc(userId).set(
+    { signalIds: FieldValue.arrayUnion(signalId) },
+    { merge: true }
+  )
 }
 
-/** Get all pending approval signal IDs */
 export async function getPendingApprovals(userId: string): Promise<string[]> {
-  return kvSmembers(`pending_approvals:${userId}`)
+  const doc = await getDb().collection('pending_approvals').doc(userId).get()
+  return doc.exists ? ((doc.data()?.signalIds as string[]) || []) : []
 }
 
-/** Remove a signal from the pending approval queue */
 export async function removePendingApproval(userId: string, signalId: string): Promise<void> {
-  await kvSrem(`pending_approvals:${userId}`, signalId)
+  await getDb().collection('pending_approvals').doc(userId).set(
+    { signalIds: FieldValue.arrayRemove(signalId) },
+    { merge: true }
+  )
 }
 
 // ─── Congressional Module ─────────────────────────────────────────────────────
@@ -303,66 +191,60 @@ const defaultCongressConfig = (userId: string): CongressionalModuleConfig => ({
 })
 
 export async function getCongressConfig(userId: string): Promise<CongressionalModuleConfig> {
-  const data = await kvGet(`congress_config:${userId}`)
-  return data ? JSON.parse(data) : defaultCongressConfig(userId)
+  const doc = await getDb().collection('congress_config').doc(userId).get()
+  return doc.exists ? (doc.data() as CongressionalModuleConfig) : defaultCongressConfig(userId)
 }
 
 export async function saveCongressConfig(config: CongressionalModuleConfig): Promise<void> {
-  await kvSet(`congress_config:${config.userId}`, JSON.stringify(config))
+  await getDb().collection('congress_config').doc(config.userId).set(config)
 }
 
 export async function saveDisclosure(disclosure: CongressionalDisclosure): Promise<void> {
-  await kvSet(`disclosure:${disclosure.id}`, JSON.stringify(disclosure))
-  await kvSadd('all_disclosures', disclosure.id)
+  await getDb().collection('disclosures').doc(disclosure.id).set(disclosure)
 }
 
 export async function getDisclosure(id: string): Promise<CongressionalDisclosure | null> {
-  const data = await kvGet(`disclosure:${id}`)
-  return data ? JSON.parse(data) : null
+  const doc = await getDb().collection('disclosures').doc(id).get()
+  return doc.exists ? (doc.data() as CongressionalDisclosure) : null
 }
 
 export async function getRecentDisclosures(limit = 50): Promise<CongressionalDisclosure[]> {
-  const ids = await kvSmembers('all_disclosures')
-  const all = await Promise.all(ids.map((id) => getDisclosure(id)))
-  const valid = all.filter(Boolean) as CongressionalDisclosure[]
-  // Sort by fetchedAt desc
-  return valid
+  const snapshot = await getDb().collection('disclosures').get()
+  return snapshot.docs
+    .map((d) => d.data() as CongressionalDisclosure)
     .sort((a, b) => new Date(b.fetchedAt).getTime() - new Date(a.fetchedAt).getTime())
     .slice(0, limit)
 }
 
 export async function saveMirrorPosition(pos: MirrorPosition): Promise<void> {
-  await kvSet(`mirror:${pos.id}`, JSON.stringify(pos))
-  await kvSadd(`user_mirrors:${pos.userId}`, pos.id)
-  if (pos.status === 'open') {
-    await kvSadd(`open_mirrors:${pos.userId}`, pos.id)
-  }
+  await getDb().collection('mirror_positions').doc(pos.id).set(pos)
 }
 
 export async function getMirrorPosition(id: string): Promise<MirrorPosition | null> {
-  const data = await kvGet(`mirror:${id}`)
-  return data ? JSON.parse(data) : null
+  const doc = await getDb().collection('mirror_positions').doc(id).get()
+  return doc.exists ? (doc.data() as MirrorPosition) : null
 }
 
 export async function updateMirrorPosition(id: string, update: Partial<MirrorPosition>): Promise<MirrorPosition | null> {
-  const data = await kvGet(`mirror:${id}`)
-  if (!data) return null
-  const pos: MirrorPosition = JSON.parse(data)
-  const updated = { ...pos, ...update }
-  await kvSet(`mirror:${id}`, JSON.stringify(updated))
+  const ref = getDb().collection('mirror_positions').doc(id)
+  const doc = await ref.get()
+  if (!doc.exists) return null
+  const updated = { ...doc.data() as MirrorPosition, ...update }
+  await ref.set(updated)
   return updated
 }
 
 export async function getOpenMirrorPositions(userId: string): Promise<MirrorPosition[]> {
-  const ids = await kvSmembers(`open_mirrors:${userId}`)
-  const all = await Promise.all(ids.map((id) => getMirrorPosition(id)))
-  return (all.filter(Boolean) as MirrorPosition[]).filter((p) => p.status === 'open')
+  const snapshot = await getDb().collection('mirror_positions').where('userId', '==', userId).get()
+  return snapshot.docs
+    .map((d) => d.data() as MirrorPosition)
+    .filter((p) => p.status === 'open')
 }
 
 export async function getAllMirrorPositions(userId: string, limit = 50): Promise<MirrorPosition[]> {
-  const ids = await kvSmembers(`user_mirrors:${userId}`)
-  const all = await Promise.all(ids.map((id) => getMirrorPosition(id)))
-  return (all.filter(Boolean) as MirrorPosition[])
+  const snapshot = await getDb().collection('mirror_positions').where('userId', '==', userId).get()
+  return snapshot.docs
+    .map((d) => d.data() as MirrorPosition)
     .sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
     .slice(0, limit)
 }
@@ -370,31 +252,24 @@ export async function getAllMirrorPositions(userId: string, limit = 50): Promise
 // ─── Signal Sources ───────────────────────────────────────────────────────────
 
 export async function saveSignalSource(source: SignalSource): Promise<void> {
-  await kvSet(`signal_source:${source.id}`, JSON.stringify(source))
-  await kvSadd('all_signal_sources', source.id)
-  if (source.enabled) {
-    await kvSadd('active_signal_sources', source.id)
-  }
+  await getDb().collection('signal_sources').doc(source.id).set(source)
 }
 
 export async function getSignalSource(id: string): Promise<SignalSource | null> {
-  const data = await kvGet(`signal_source:${id}`)
-  return data ? JSON.parse(data) : null
+  const doc = await getDb().collection('signal_sources').doc(id).get()
+  return doc.exists ? (doc.data() as SignalSource) : null
 }
 
 export async function getActiveSignalSources(): Promise<SignalSource[]> {
-  const ids = await kvSmembers('active_signal_sources')
-  const sources = await Promise.all(ids.map((id) => getSignalSource(id)))
-  return sources.filter(Boolean) as SignalSource[]
+  const snapshot = await getDb().collection('signal_sources').where('enabled', '==', true).get()
+  return snapshot.docs.map((d) => d.data() as SignalSource)
 }
 
 export async function getAllSignalSources(): Promise<SignalSource[]> {
-  const ids = await kvSmembers('all_signal_sources')
-  const sources = await Promise.all(ids.map((id) => getSignalSource(id)))
-  return sources.filter(Boolean) as SignalSource[]
+  const snapshot = await getDb().collection('signal_sources').get()
+  return snapshot.docs.map((d) => d.data() as SignalSource)
 }
 
 export async function saveExternalSignal(signal: ExternalSignal): Promise<void> {
-  await kvSet(`external_signal:${signal.id}`, JSON.stringify(signal))
-  await kvLpush(`signals_ext:${signal.sourceId}`, signal.id)
+  await getDb().collection('external_signals').doc(signal.id).set(signal)
 }
