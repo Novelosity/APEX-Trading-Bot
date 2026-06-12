@@ -72,7 +72,9 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [balanceLoading, setBalanceLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [scanning, setScanning] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+  const [lastScan, setLastScan] = useState<Date | null>(null)
   const [chartPeriod, setChartPeriod] = useState<'7d' | '30d'>('30d')
   const [livePrices, setLivePrices] = useState<Record<string, number>>({})
 
@@ -152,14 +154,21 @@ export default function DashboardPage() {
     fetchBalance()
   }, [fetchAll, fetchBalance])
 
-  // Auto-refresh every 30 seconds
+  // Auto-refresh data every 15 seconds
   useEffect(() => {
     const interval = setInterval(() => {
       fetchAll(true)
-      fetchBalance()
-    }, 30000)
+    }, 15000)
     return () => clearInterval(interval)
-  }, [fetchAll, fetchBalance])
+  }, [fetchAll])
+
+  // Balance refresh every 60 seconds (slower — expensive call)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchBalance()
+    }, 60000)
+    return () => clearInterval(interval)
+  }, [fetchBalance])
 
   // Live price refresh every 10 seconds
   useEffect(() => {
@@ -194,6 +203,22 @@ export default function DashboardPage() {
     const data = await res.json()
     if (data.success && data.data) {
       setSettings((prev) => prev ? { ...prev, execMode: data.data.execMode, paperMode: data.data.paperMode } : prev)
+    }
+  }
+
+  const handleScan = async () => {
+    setScanning(true)
+    try {
+      const res = await fetch('/api/bot/scan', { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        setLastScan(new Date())
+        await fetchAll(true)
+      }
+    } catch {
+      // silent fail
+    } finally {
+      setScanning(false)
     }
   }
 
@@ -314,6 +339,26 @@ export default function DashboardPage() {
                 🛑 Kill Switch
               </button>
             )}
+            <button
+              onClick={handleScan}
+              disabled={scanning || loading}
+              className="flex items-center gap-2 px-4 py-2 bg-[#4f8ef7]/10 border border-[#4f8ef7]/30 rounded-xl text-sm text-[#4f8ef7] hover:bg-[#4f8ef7]/20 transition-colors disabled:opacity-50"
+              title={lastScan ? `Last scanned: ${lastScan.toLocaleTimeString()}` : 'Scan all pairs for new signals'}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className={scanning ? 'animate-spin' : ''}
+              >
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              {scanning ? 'Scanning...' : 'Scan Now'}
+            </button>
             <button
               onClick={() => fetchAll(true)}
               disabled={refreshing}
@@ -582,11 +627,17 @@ export default function DashboardPage() {
                   </svg>
                 </div>
                 <p className="text-[#6b6b80] text-sm">No signals yet</p>
-                <p className="text-[#4a4a5a] text-xs mt-1">Signals generated every 5 minutes via cron</p>
+                <button
+                  onClick={handleScan}
+                  disabled={scanning}
+                  className="mt-3 px-4 py-2 bg-[#4f8ef7]/10 border border-[#4f8ef7]/30 rounded-xl text-xs text-[#4f8ef7] hover:bg-[#4f8ef7]/20 transition-colors disabled:opacity-50"
+                >
+                  {scanning ? 'Scanning...' : 'Scan Now'}
+                </button>
               </div>
             ) : (
               <div className="p-4 space-y-2">
-                {signals.slice(0, 5).map((signal) => (
+                {signals.slice(0, 10).map((signal) => (
                   <SignalCard key={signal.id} signal={signal} compact />
                 ))}
               </div>
