@@ -6,8 +6,8 @@ import { getIronSession } from 'iron-session'
 import { cookies } from 'next/headers'
 import type { SessionData } from '@/lib/types'
 import {
-  getUser, getSignal, markSignalExecuted, saveTrade, saveUser,
-  updateBotState, getBotState, getOpenTrades, getTrades,
+  getUser, getSignal, markSignalExecuted, saveUser,
+  updateBotState, getBotState, getOpenTrades,
   getPendingApprovals, removePendingApproval,
   getDailyTradeCount, incrementDailyTradeCount, getLastLossAt,
 } from '@/lib/storage'
@@ -30,11 +30,6 @@ async function requireSession(): Promise<{ session: SessionData; error?: never }
 }
 
 const PAPER_BALANCE = 10000
-const PAIRS_ATR_APPROX: Record<string, number> = {
-  'BTC/USDT': 800, 'ETH/USDT': 45, 'SOL/USDT': 3.5, 'LTC/USDT': 2.5,
-  'BNB/USDT': 8, 'XRP/USDT': 0.03, 'ADA/USDT': 0.002, 'MATIC/USDT': 0.05,
-  'LINK/USDT': 0.5, 'AVAX/USDT': 2.5, 'ATOM/USDT': 1.2, 'DOT/USDT': 0.8,
-}
 
 /** GET /api/bot/approve — list pending approvals */
 export async function GET() {
@@ -133,7 +128,6 @@ export async function POST(request: Request) {
     if (user.paperMode) {
       const botState = await getBotState(userId)
       const entry = signal.entry
-      const atr = PAIRS_ATR_APPROX[signal.pair] || entry * 0.01
       const availableBalance = PAPER_BALANCE * (user.balancePct / 100)
 
       const riskCheck = await checkCanTrade(userId, signal.pair, signal.direction, openTrades, user, availableBalance, tradesToday, lastLossAt)

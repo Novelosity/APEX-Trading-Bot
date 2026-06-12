@@ -16,7 +16,6 @@ export async function POST(request: NextRequest) {
     }
 
     const { action, reason } = parsed.data
-    const botState = await getBotState(session.userId)
 
     if (action === 'halt') {
       await updateBotState(session.userId, {

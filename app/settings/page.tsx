@@ -53,7 +53,7 @@ export default function SettingsPage() {
 
   const fetchSettings = useCallback(async () => {
     try {
-      const res = await fetch('/api/settings')
+      const res = await fetch('/api/settings?cache=' + Date.now())
       const data = await res.json()
       if (!data.success) {
         router.push('/onboard')
@@ -135,6 +135,14 @@ export default function SettingsPage() {
         return
       }
       setSaved(true)
+      if (data.data) {
+        setExecMode(data.data.execMode)
+        setPaperMode(data.data.paperMode ?? true)
+        setRiskPct(data.data.riskPct)
+        setBalancePct(data.data.balancePct)
+        setMaxPositions(data.data.maxPositions)
+        setLeverage(data.data.leverage)
+      }
       setTimeout(() => setSaved(false), 3000)
     } catch {
       setError('Network error')

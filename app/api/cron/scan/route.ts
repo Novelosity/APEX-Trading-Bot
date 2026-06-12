@@ -18,12 +18,6 @@ import { checkCanTrade } from '@/lib/risk'
 import { calculateTradeSpec } from '@/lib/position-sizing'
 import type { Signal, SignalSource, Trade } from '@/lib/types'
 
-const PAIRS_ATR_APPROX: Record<string, number> = {
-  'BTC/USDT': 800, 'ETH/USDT': 45, 'SOL/USDT': 3.5, 'LTC/USDT': 2.5,
-  'BNB/USDT': 8, 'ADA/USDT': 0.002, 'MATIC/USDT': 0.05, 'LINK/USDT': 0.5,
-  'AVAX/USDT': 2.5, 'ATOM/USDT': 1.2, 'DOT/USDT': 0.8, 'ARB/USDT': 0.15, 'OP/USDT': 0.4,
-}
-
 const SCAN_PAIRS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'LTC/USDT', 'BNB/USDT', 'ADA/USDT', 'MATIC/USDT', 'LINK/USDT', 'AVAX/USDT', 'ATOM/USDT', 'DOT/USDT', 'ARB/USDT', 'OP/USDT']
 const TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d', '1w']
 
@@ -411,3 +405,4 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: message }, { status: 500 })
   }
 }
+
