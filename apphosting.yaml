@@ -1,0 +1,16 @@
+runConfig:
+  cpu: 1
+  memoryMiB: 512
+  concurrency: 80
+  maxInstances: 10
+  minInstances: 0
+
+env:
+  - variable: SESSION_SECRET
+    secret: session-secret
+    availability:
+      - RUNTIME
+  - variable: CRON_SECRET
+    secret: cron-secret
+    availability:
+      - RUNTIME
