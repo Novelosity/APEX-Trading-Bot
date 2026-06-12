@@ -30,6 +30,7 @@ interface Balance {
   total: number
   free: number
   used: number
+  paper?: boolean
 }
 
 interface BotStateData {
@@ -141,7 +142,7 @@ export default function DashboardPage() {
     try {
       const res = await fetch('/api/balance')
       const data = await res.json()
-      if (data.success) setBalance(data.data)
+      if (data.success) setBalance({ ...data.data, paper: data.paper ?? false })
     } catch {
       // silent fail
     } finally {
@@ -393,7 +394,7 @@ export default function DashboardPage() {
                 ? 'Loading...'
                 : '—'
             }
-            subtitle="USDT"
+            subtitle={balance?.paper ? 'USDT (Paper)' : 'USDT'}
             icon={
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="12" y1="1" x2="12" y2="23" />

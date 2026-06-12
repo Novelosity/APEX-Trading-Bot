@@ -34,6 +34,18 @@ export async function GET() {
       }
     }
 
+    // Paper mode — return virtual balance (no exchange call needed)
+    if (user.paperMode) {
+      const PAPER_BALANCE = 10000
+      const total = PAPER_BALANCE * (user.balancePct / 100)
+      return NextResponse.json({
+        success: true,
+        exchange: session.exchange,
+        paper: true,
+        data: { total, free: total, used: 0, currency: 'USDT' },
+      })
+    }
+
     const client = new ExchangeClient(user)
     const balance = await client.fetchBalance()
 

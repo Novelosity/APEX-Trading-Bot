@@ -111,11 +111,40 @@ export class ExchangeClient {
   async fetchBalance(): Promise<{ free: number; total: number; used: number }> {
     const ex = await this.getExchange()
     const balance = await ex.fetchBalance()
-    const usdt = balance['USDT'] || balance['USD'] || { free: 0, total: 0, used: 0 }
+
+    // Try common stablecoin/quote keys in order of preference
+    const stableKeys = ['USDT', 'USDC', 'BUSD', 'USD', 'TUSD', 'DAI']
+    let entry: { free?: number | null; total?: number | null; used?: number | null } | undefined
+
+    for (const key of stableKeys) {
+      const candidate = balance[key]
+      if (candidate && (candidate.total || candidate.free)) {
+        entry = candidate
+        break
+      }
+    }
+
+    // Fallback: sum all quote-currency totals from balance.total map
+    if (!entry) {
+      const totalMap = balance.total as Record<string, number> | undefined
+      if (totalMap) {
+        for (const key of stableKeys) {
+          if (totalMap[key] && totalMap[key] > 0) {
+            entry = {
+              total: totalMap[key],
+              free: (balance.free as Record<string, number>)?.[key] ?? totalMap[key],
+              used: (balance.used as Record<string, number>)?.[key] ?? 0,
+            }
+            break
+          }
+        }
+      }
+    }
+
     return {
-      free: parseFloat(String(usdt.free || 0)),
-      total: parseFloat(String(usdt.total || 0)),
-      used: parseFloat(String(usdt.used || 0)),
+      free: parseFloat(String(entry?.free || 0)),
+      total: parseFloat(String(entry?.total || 0)),
+      used: parseFloat(String(entry?.used || 0)),
     }
   }
 
