@@ -92,11 +92,11 @@ export default function DashboardPage() {
     if (showRefresh) setRefreshing(true)
     try {
       const [settingsRes, positionsRes, signalsRes, chartRes, metricsRes] = await Promise.all([
-        fetch('/api/settings'),
-        fetch('/api/positions'),
-        fetch('/api/signals'),
-        fetch(`/api/chart?period=${chartPeriod}`),
-        fetch('/api/metrics'),
+        fetch('/api/settings?cache=' + Date.now()),
+        fetch('/api/positions?cache=' + Date.now()),
+        fetch('/api/signals?cache=' + Date.now()),
+        fetch(`/api/chart?period=${chartPeriod}&cache=` + Date.now()),
+        fetch('/api/metrics?cache=' + Date.now()),
       ])
 
       const approvalsRes = await fetch('/api/bot/approve')
@@ -174,15 +174,26 @@ export default function DashboardPage() {
     if (!loading) fetchAll()
   }, [chartPeriod]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Refetch when window regains focus (e.g., user returns from settings)
+  useEffect(() => {
+    const handleFocus = () => {
+      fetchAll()
+      fetchBalance()
+    }
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [fetchAll, fetchBalance])
+
   const handleToggleExecMode = async (mode: 'manual' | 'auto' | 'approval') => {
     const res = await fetch('/api/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ execMode: mode }),
+      // Include paperMode so the server never resets it to the default (true) on a partial update
+      body: JSON.stringify({ execMode: mode, paperMode: settings?.paperMode ?? false }),
     })
     const data = await res.json()
-    if (data.success) {
-      setSettings((prev) => prev ? { ...prev, execMode: mode } : prev)
+    if (data.success && data.data) {
+      setSettings((prev) => prev ? { ...prev, execMode: data.data.execMode, paperMode: data.data.paperMode } : prev)
     }
   }
 

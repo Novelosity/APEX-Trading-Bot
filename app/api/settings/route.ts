@@ -14,6 +14,8 @@ export async function GET() {
 
 if (!user) {
        if (session.exchange) {
+         // Return defaults without writing to KV — prevents overwriting real settings
+         // if KV had a transient read failure. User is created on first PATCH (save).
          user = {
            id: session.userId,
            exchange: session.exchange,
@@ -29,7 +31,6 @@ if (!user) {
            createdAt: new Date().toISOString(),
            updatedAt: new Date().toISOString(),
          }
-         await saveUser(user)
        } else {
          return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
        }
@@ -91,36 +92,34 @@ export async function PATCH(request: NextRequest) {
     let updated = await updateUser(session.userId, parsed.data)
     if (!updated) {
       if (session.exchange) {
-        // Create user from session data with submitted settings
-        await saveUser({
-          id: session.userId,
-          exchange: session.exchange,
-          apiKeyEnc: '',
-          apiSecretEnc: '',
-          tradingMode: session.tradingMode || 'spot',
-          execMode: parsed.data.execMode ?? 'manual',
-          leverage: session.leverage || 1,
-          balancePct: parsed.data.balancePct ?? 100,
-          riskPct: parsed.data.riskPct ?? 1,
-          maxPositions: parsed.data.maxPositions ?? 5,
-          paperMode: parsed.data.paperMode ?? true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        })
-        updated = {
-          id: session.userId,
-          exchange: session.exchange,
-          apiKeyEnc: '',
-          apiSecretEnc: '',
-          tradingMode: session.tradingMode || 'spot',
-          execMode: parsed.data.execMode ?? 'manual',
-          leverage: session.leverage || 1,
-          balancePct: parsed.data.balancePct ?? 100,
-          riskPct: parsed.data.riskPct ?? 1,
-          maxPositions: parsed.data.maxPositions ?? 5,
-          paperMode: parsed.data.paperMode ?? true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+        // updateUser returned null — either a transient KV read failure or a truly new user.
+        // Retry getUser before creating with defaults to avoid resetting real settings.
+        const retryUser = await getUser(session.userId)
+        if (retryUser) {
+          // User exists — transient issue on first read. Merge and save properly.
+          const merged = { ...retryUser, ...parsed.data, updatedAt: new Date().toISOString() }
+          await saveUser(merged)
+          updated = merged
+        } else {
+          // Truly new user — create with provided values, falling back to safe defaults.
+          // Use parsed.data.leverage (not session.leverage) so leverage changes are respected.
+          const newUser = {
+            id: session.userId,
+            exchange: session.exchange,
+            apiKeyEnc: '',
+            apiSecretEnc: '',
+            tradingMode: session.tradingMode || 'spot',
+            execMode: parsed.data.execMode ?? 'manual',
+            leverage: parsed.data.leverage ?? session.leverage ?? 1,
+            balancePct: parsed.data.balancePct ?? 100,
+            riskPct: parsed.data.riskPct ?? 1,
+            maxPositions: parsed.data.maxPositions ?? 5,
+            paperMode: parsed.data.paperMode ?? true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }
+          await saveUser(newUser)
+          updated = newUser
         }
       } else {
         return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 })
