@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto'
 export const MODEL_VERSION = '3.0.0'
 
 // Minimum confidence score to generate a signal
-const MIN_SCORE_TO_SIGNAL = 75
+const MIN_SCORE_TO_SIGNAL = 60
 // Minimum R:R ratio to allow a trade
 const MIN_RISK_REWARD = 2.0
 // Minimum timeframes that must agree
@@ -686,17 +686,18 @@ function calculateScore(params: {
   if (volRatio >= 2.0) volumePts = 15
   else if (volRatio >= 1.5) volumePts = 12
   else if (volRatio >= 1.3) volumePts = 8
-  else if (volRatio >= 1.1) volumePts = 4
+  else if (volRatio >= 1.1) volumePts = 6
+  else if (volRatio >= 0.8) volumePts = 3
   else volumePts = 0
 
-  if (volumePts > 0) {
-    reasons.push({
-      indicator: 'VOLUME_CONFIRMATION',
-      description: `Volume ${(volRatio * 100 - 100).toFixed(0)}% above 20-bar avg — confirms move`,
-      contribution: volumePts,
-      bullish: isLong,
-    })
-  }
+  reasons.push({
+    indicator: volRatio >= 1.1 ? 'VOLUME_CONFIRMATION' : 'VOLUME_NEUTRAL',
+    description: volRatio >= 1.1
+      ? `Volume ${(volRatio * 100 - 100).toFixed(0)}% above 20-bar avg — confirms move`
+      : `Volume near average (${(volRatio * 100).toFixed(0)}% of avg)`,
+    contribution: volumePts,
+    bullish: isLong,
+  })
 
   // ── 4. S/R QUALITY (0-15 pts) ─────────────────────────────────────────────
   const levels = isLong ? srLevels.supports : srLevels.resistances
@@ -922,8 +923,8 @@ export function generateSignal(
 
   // ── Tier classification ───────────────────────────────────────────────────
   let tier: Signal['tier']
-  if (scoreBreakdown.total >= 90) tier = 'ULTRA_HIGH'
-  else if (scoreBreakdown.total >= 80) tier = 'HIGH'
+  if (scoreBreakdown.total >= 85) tier = 'ULTRA_HIGH'
+  else if (scoreBreakdown.total >= 72) tier = 'HIGH'
   else tier = 'MODERATE'
 
   // ── Build reasons list ────────────────────────────────────────────────────

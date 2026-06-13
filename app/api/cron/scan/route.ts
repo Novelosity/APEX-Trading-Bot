@@ -152,11 +152,8 @@ export async function GET(request: Request) {
           }
 
           const signal = generateSignal(user.id, pair, candlesByTF)
-          // v3.0 engine already enforces 75+ score internally, but double-check
-          if (!signal || signal.score < 75) continue
-
-          await saveSignal(signal)
-          signalsFound++
+          // v3.0 engine enforces 60+ score internally, but double-check
+          if (!signal || signal.score < 60) continue
 
           const botState = await getBotState(user.id)
 
@@ -165,7 +162,6 @@ export async function GET(request: Request) {
 
           // ── Approval mode: queue for human review ────────────────────────
           if (user.execMode === 'approval') {
-            // Attach expiry (2h from now) and queue for dashboard review
             const signalWithApproval = {
               ...signal,
               pendingApproval: true,
@@ -173,14 +169,18 @@ export async function GET(request: Request) {
             }
             await saveSignal(signalWithApproval)
             await savePendingApproval(user.id, signal.id)
+            signalsFound++
             continue
           }
+
+          await saveSignal(signal)
+          signalsFound++
 
           // ── Manual mode: only save signal, no execution ──────────────────
           if (user.execMode === 'manual') continue
 
-          // ── Auto mode: execute if HIGH or ULTRA_HIGH ─────────────────────
-          if (user.execMode === 'auto' && (signal.tier === 'HIGH' || signal.tier === 'ULTRA_HIGH')) {
+          // ── Auto mode: execute if MODERATE, HIGH, or ULTRA_HIGH ─────────
+          if (user.execMode === 'auto') {
             try {
               const PAPER_BALANCE = 10000
 
